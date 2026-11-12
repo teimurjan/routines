@@ -1,0 +1,7 @@
+node_modules
+.tmp
+.env
+.secrets
+.DS_Store
+app/Sources/RoutinesKit/Resources/prelude.js
+build/

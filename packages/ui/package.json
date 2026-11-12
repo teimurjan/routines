@@ -1,0 +1,12 @@
+{
+  "name": "@routines/ui",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@routines/sdk": "workspace:*",
+    "preact": "10.29.8"
+  }
+}

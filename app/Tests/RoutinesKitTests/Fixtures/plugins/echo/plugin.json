@@ -1,0 +1,47 @@
+{
+  "id": "echo",
+  "name": "Echo",
+  "description": "A test plugin.",
+  "schedule": [
+    {
+      "minute": 0
+    }
+  ],
+  "timeoutMinutes": 1,
+  "settings": [
+    {
+      "key": "greeting",
+      "label": "Greeting",
+      "default": "hey"
+    }
+  ],
+  "permissions": {
+    "exec": [
+      "echo"
+    ]
+  },
+  "actions": [
+    {
+      "id": "done",
+      "label": "Done",
+      "target": "item"
+    },
+    {
+      "id": "boom",
+      "label": "Boom",
+      "target": "item"
+    },
+    {
+      "id": "later",
+      "label": "Later",
+      "target": "item"
+    },
+    {
+      "id": "watch",
+      "label": "Watch",
+      "input": {
+        "placeholder": "a car"
+      }
+    }
+  ]
+}

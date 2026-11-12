@@ -1,0 +1,48 @@
+{
+  "id": "ui-plugin",
+  "name": "UI Plugin",
+  "description": "A test plugin with a UI.",
+  "timeoutMinutes": 1,
+  "ui": {
+    "title": "Items"
+  },
+  "actions": [
+    {
+      "id": "open",
+      "label": "Open",
+      "target": "item"
+    },
+    {
+      "id": "trash",
+      "label": "Trash",
+      "style": "destructive",
+      "confirm": true,
+      "target": "item"
+    },
+    {
+      "id": "reply",
+      "label": "Reply",
+      "input": {
+        "placeholder": "text"
+      },
+      "target": "item"
+    },
+    {
+      "id": "refresh",
+      "label": "Refresh"
+    },
+    {
+      "id": "wipe",
+      "label": "Wipe",
+      "style": "destructive",
+      "confirm": true
+    },
+    {
+      "id": "ask",
+      "label": "Ask",
+      "input": {
+        "placeholder": "a question"
+      }
+    }
+  ]
+}

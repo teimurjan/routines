@@ -1,0 +1,9 @@
+{
+  "name": "routines-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun scripts/build-plugins.ts",
+    "test": "bun test plugins"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "routines",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:prelude": "bun scripts/build-prelude.ts",
+    "build": "bun run build:prelude && bun run build:workspace",
+    "tokens": "bun scripts/build-tokens.ts",
+    "app:test": "bun run build:prelude && cd app && swift test",
+    "app:build": "bun run build && cd app && swift build -c release",
+    "app:bundle": "bun run build && scripts/bundle-app.sh",
+    "check": "bun run tokens --check && bun run typecheck && bun run test && bun run app:test",
+    "test": "bun test packages scripts",
+    "typecheck": "bun scripts/typecheck.ts",
+    "build:workspace": "bun scripts/build-workspace.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "typescript": "^7.0.2"
+  },
+  "workspaces": [
+    "packages/*"
+  ]
+}

@@ -1,0 +1,21 @@
+@import "./tokens.css";
+
+/* The host gives the accent color of the Mac in the first snapshot, before the page shows. */
+:root {
+  color-scheme: light dark;
+  --accent: AccentColor;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--text);
+  font-family: -apple-system, system-ui;
+  font-size: var(--font-body-size);
+  font-weight: var(--font-body-weight);
+}
+
+* {
+  box-sizing: border-box;
+}

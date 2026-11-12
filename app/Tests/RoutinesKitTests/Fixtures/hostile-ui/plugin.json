@@ -1,0 +1,16 @@
+{
+  "id": "hostile-ui",
+  "name": "Hostile UI",
+  "description": "A test page that tries to leave its web view.",
+  "timeoutMinutes": 1,
+  "ui": {
+    "title": "Hostile"
+  },
+  "actions": [
+    {
+      "id": "done",
+      "label": "Done",
+      "target": "item"
+    }
+  ]
+}
