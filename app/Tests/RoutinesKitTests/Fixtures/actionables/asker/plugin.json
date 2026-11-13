@@ -1,0 +1,16 @@
+{
+  "id": "asker",
+  "name": "Asker",
+  "description": "A test routine that asks you about each bug.",
+  "timeoutMinutes": 1,
+  "handles": [{ "kind": "bug", "states": ["new"] }],
+  "kinds": ["bug"],
+  "transitions": [
+    { "id": "ask", "label": "Ask", "from": ["new"], "risk": "reversible" },
+    { "id": "answer", "label": "Answer", "from": ["waiting-on-you"], "risk": "reversible", "input": { "placeholder": "Your answer" } },
+    { "id": "merge", "label": "Merge", "from": ["working"], "risk": "destructive" },
+    { "id": "approve", "label": "Approve", "from": ["waiting-on-you"], "risk": "outward", "confirm": true, "style": "primary" },
+    { "id": "drop", "label": "Drop", "from": ["new", "ready", "waiting-on-you"], "risk": "reversible" }
+  ],
+  "permissions": { "external": ["answer", "drop"] }
+}

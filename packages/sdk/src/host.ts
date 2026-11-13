@@ -89,6 +89,108 @@ export type HttpResponse = { status: number; url: string; headers: [string, stri
 
 export type FileEntry = { name: string; isDirectory: boolean; modifiedAt: string };
 
+// The shared lifecycle of each actionable. See specs/004-actionables/data-model.md.
+export type State = "new" | "ready" | "working" | "waiting-on-you" | "waiting-on-others" | "done" | "failed" | "dropped";
+
+export type Risk = "read" | "reversible" | "outward" | "destructive";
+
+export type Link = { label: string; url: string };
+
+export type Session = { id: string; cwd: string };
+
+export type Question = {
+  text: string;
+  // The transition that your answer starts.
+  transition?: string;
+  session?: Session;
+  // Set on an `asked` step: the transition that waits for Allow.
+  permission?: string;
+};
+
+export type Step = {
+  id: string;
+  at: string;
+  // "transition:<id>", "handoff", "created", "updated", "asked", "answered", "denied", "board" or "migrated".
+  action: string;
+  actor: string;
+  trigger: string;
+  from: State;
+  to: State;
+  outcome?: string;
+  question?: Question;
+  answer?: string;
+  oldOwner?: string;
+  oldKind?: string;
+};
+
+export type Actionable = {
+  id: string;
+  kind: string;
+  source: string;
+  dedupeKey: string;
+  owner: string | null;
+  pastOwners: string[];
+  state: State;
+  title: string;
+  body?: string;
+  status?: string;
+  tags?: string[];
+  links: Link[];
+  images?: string[];
+  date?: string;
+  progress?: number;
+  data: Record<string, unknown>;
+  steps: Step[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+// `readOnly` is true for an actionable that the routine owned before.
+export type StoredActionable = Actionable & { readOnly: boolean };
+
+export type TransitionDeclaration = {
+  id: string;
+  label: string;
+  from: State[];
+  risk: Risk;
+  input?: { placeholder: string };
+  confirm?: boolean;
+  style?: "primary" | "destructive" | "normal";
+};
+
+export type Move = {
+  to: State;
+  status?: string;
+  title?: string;
+  body?: string;
+  data?: Record<string, unknown>;
+  links?: Link[];
+  question?: { text: string; transition: string; session?: Session };
+};
+
+export type Handoff = { state: State; kind?: string; title?: string; data?: Record<string, unknown> };
+
+export type TransitionEvent = {
+  actionable: StoredActionable;
+  transition: string;
+  text?: string;
+  // Set when the trigger answers a question that carried a session.
+  session?: Session;
+  // The steps since the last answer, for a session that cannot resume.
+  history: Step[];
+};
+
+// The task of one source in the shared poll. The input follows the prompt as JSON.
+export type PollRequest = { prompt: string; input: unknown; output: Record<string, unknown> };
+
+export type PollItem = { dedupeKey: string; kind: string; title: string; body?: string; data: Record<string, unknown>; links?: Link[] };
+
+export type PollEvent = { cursor: unknown };
+
+export type PollOutputEvent = { cursor: unknown; output: unknown };
+
+export type PollResult = { items: PollItem[]; cursor: unknown };
+
 export type RoutinesHost = {
   info: HostInfo;
   log: (message: string) => void;
@@ -114,8 +216,17 @@ export type RoutinesHost = {
     remove: (id: string) => Promise<Result<void>>;
     list: () => Promise<Result<StoredCard[]>>;
   };
+  // The actionables of this routine. See specs/004-actionables/contracts/actionables.md.
+  actionables: {
+    list: (options?: { states?: State[]; past?: boolean }) => Promise<Result<StoredActionable[]>>;
+    get: (id: string) => Promise<Result<StoredActionable | null>>;
+    // Only a `read` or `reversible` transition. Use `request` for the others.
+    move: (id: string, move: Move & { transition: string }) => Promise<Result<StoredActionable>>;
+    request: (id: string, transition: string, text?: string) => Promise<Result<"queued" | "asked">>;
+    handoff: (id: string, change: Handoff) => Promise<Result<StoredActionable>>;
+  };
   notify: (notification: Notification) => Promise<Result<void>>;
-  // Asks for a run with the trigger "soon" after `delayMs`. A second request keeps the earlier time.
+  // Asks for a run with the trigger "soon" after `delayMs`. A request during a run queues one more run, and more requests merge into it.
   runSoon: (delayMs: number) => Promise<Result<void>>;
   notes: { list: () => Promise<Result<Note[]>> };
   // Needs `permissions.activity`. Returns the activity since an ISO 8601 time.
@@ -138,9 +249,18 @@ export type RoutinesHost = {
   definePlugin: (plugin: PluginDefinition) => void;
 };
 
-export type Trigger = "schedule" | "manual" | "launch" | "action" | "soon";
+// The trigger string of today: clock is "schedule", self is "soon", ui is "action", and each other source keeps its name.
+export type Trigger = "schedule" | "manual" | "launch" | "action" | "soon" | "routine" | "external" | "answer" | "source";
 
-export type RunContext = { settings: Record<string, string>; trigger: Trigger };
+export type TriggerSource = "clock" | "ui" | "self" | "routine" | "external" | "answer" | "source";
+
+export type RunContext = {
+  settings: Record<string, string>;
+  trigger: Trigger | (string & {});
+  source?: TriggerSource;
+  // The actionable of a transition call.
+  actionable?: string;
+};
 
 export type ActionEvent = { cardId: string; actionId: string; text?: string };
 
@@ -153,6 +273,11 @@ export type PluginDefinition = {
   onAction?: (event: ActionEvent, context: RunContext) => Promise<Result<string>>;
   // Returns the line that the plugin page shows under its menu.
   onPluginAction?: (event: PluginActionEvent, context: RunContext) => Promise<Result<string>>;
+  // The host calls it after the policy allows the trigger, and applies the move as one step.
+  onTransition?: (event: TransitionEvent, context: RunContext) => Promise<Result<Move>>;
+  // A source plugin: its part of the shared poll, then the items from its part of the output.
+  pollRequest?: (event: PollEvent, context: RunContext) => Promise<Result<PollRequest>>;
+  onPoll?: (event: PollOutputEvent, context: RunContext) => Promise<Result<PollResult>>;
 };
 
 declare global {

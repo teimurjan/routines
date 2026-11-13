@@ -8,8 +8,9 @@ export type PluginState = {
   error: string | undefined;
   perform: (cardId: string, actionId: string, text?: string) => Promise<Result<string | null>>;
   performPluginAction: (actionId: string, text?: string) => Promise<Result<string | null>>;
+  transition: (actionableId: string, transitionId: string, text?: string) => Promise<Result<string | null>>;
   openLink: (url: string) => Promise<Result<null>>;
-  // True while an action of the item runs, or while a menu action runs when no id is given.
+  // True while an action or a transition of the item runs, or while a menu action runs when no id is given.
   isPending: (cardId?: string) => boolean;
 };
 
@@ -42,11 +43,15 @@ export const usePluginState = (): PluginState => {
     [track],
   );
   const performPluginAction = useCallback((actionId: string, text?: string) => track(MENU, () => bridge.performPluginAction(actionId, text)), [track]);
+  const transition = useCallback(
+    (actionableId: string, transitionId: string, text?: string) => track(actionableId, () => bridge.transition(actionableId, transitionId, text)),
+    [track],
+  );
 
   const isPending = (cardId?: string) =>
     cardId === undefined ? pressed.has(MENU) || snapshot?.pending.plugin === true : pressed.has(cardId) || snapshot?.pending.items.includes(cardId) === true;
 
-  return { snapshot, error, perform, performPluginAction, openLink: bridge.openLink, isPending };
+  return { snapshot, error, perform, performPluginAction, transition, openLink: bridge.openLink, isPending };
 };
 
 // Calls the handler when you open a notification of an item.

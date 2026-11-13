@@ -1,13 +1,16 @@
-// A host for `bun test`. Files, commands and HTTP are real. The board, the notes, the locks and the notifications live in memory.
+// A host for `bun test`. Files, commands and HTTP are real. The board, the actionables, the notes, the locks and the notifications live in memory.
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Activity, Card, CardAction, ExecOptions, HostInfo, Note, Notification, Page, PluginDefinition, RoutinesHost, StoredCard } from "./host.ts";
+import { fakeActionables, type FakeActionables } from "./fake-actionables.ts";
+import type { Activity, Card, CardAction, ExecOptions, HostInfo, Note, Notification, Page, PluginDefinition, RoutinesHost, StoredCard, TransitionDeclaration } from "./host.ts";
 import { err, ok, type Result } from "./result.ts";
 
 export type TestHost = {
   host: RoutinesHost;
   cards: Map<string, StoredCard>;
+  // Checks the owner and the transitions of `plugin.json` in `info.pluginDir`, as the host does.
+  actionables: FakeActionables;
   notifications: Notification[];
   logs: string[];
   notes: Note[];
@@ -57,6 +60,7 @@ export const installTestHost = (overrides: Partial<Omit<RoutinesHost, "info">> &
   const pages: Page[] = [];
   let plugin: PluginDefinition | undefined;
   const { info, ...replaced } = overrides;
+  const actionables = fakeActionables(() => host.info.pluginId, () => manifestTransitions(host.info.pluginDir));
 
   const host: RoutinesHost = {
     info: {
@@ -113,6 +117,7 @@ export const installTestHost = (overrides: Partial<Omit<RoutinesHost, "info">> &
       remove: async (id) => ok(void cards.delete(id)),
       list: async () => ok([...cards.values()]),
     },
+    actionables: actionables.api,
     notify: async (notification) => ok(void notifications.push(notification)),
     runSoon: async (delayMs) => ok(void soonRequests.push(delayMs)),
     notes: { list: async () => ok([...notes]) },
@@ -143,8 +148,16 @@ export const installTestHost = (overrides: Partial<Omit<RoutinesHost, "info">> &
   };
 
   globalThis.routines = host;
-  return { host, cards, notifications, logs, notes, soonRequests, activity, pages, plugin: () => plugin };
+  return { host, cards, actionables, notifications, logs, notes, soonRequests, activity, pages, plugin: () => plugin };
 };
 
+const readManifest = (pluginDir: string): { actions?: CardAction[]; transitions?: TransitionDeclaration[] } => {
+  const file = join(pluginDir, "plugin.json");
+  return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+};
+
+// The transitions that the manifest in `pluginDir` declares, or none without a manifest.
+export const manifestTransitions = (pluginDir: string): TransitionDeclaration[] => readManifest(pluginDir).transitions ?? [];
+
 // The actions that the manifest in `pluginDir` lists, for tests of the action list.
-export const manifestActions = (pluginDir: string): CardAction[] => (JSON.parse(readFileSync(join(pluginDir, "plugin.json"), "utf8")) as { actions?: CardAction[] }).actions ?? [];
+export const manifestActions = (pluginDir: string): CardAction[] => readManifest(pluginDir).actions ?? [];

@@ -1,0 +1,8 @@
+{
+  "bug": {
+    "type": "object",
+    "required": ["repo", "details"],
+    "properties": { "repo": { "type": "string" }, "details": { "type": "string", "maxLength": 8000 } },
+    "additionalProperties": false
+  }
+}

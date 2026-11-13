@@ -2,85 +2,121 @@ import AppKit
 import Foundation
 import Observation
 
-/// Loads the plugins, runs them on their schedules and on card actions, and owns the stores that the views show.
+/// Loads the plugins, runs them through one entrance, and owns the stores that the views show.
 @MainActor
 @Observable
 public final class PluginHost {
     public let paths: HostPaths
-    public let board: BoardStore
+    public let actionables: ActionableStore
     public let notes: NotesStore
     public let settings: SettingsStore
     public let notifications: NotificationStore
     public let pages: PageStore
     public let runs: RunStore
+    public let decisions: DecisionLog
+    public let allowList: AllowList
+    public let cursors: CursorStore
+    public let memory: MemoryStore
     public private(set) var plugins: [PluginEntry] = []
-    /// The plugins with a run in progress.
-    public private(set) var running: Set<String> = []
-    /// The cards with an action in progress, as `plugin/card`, and the plugins with a menu action in progress, as `plugin`.
-    public private(set) var pendingActions: Set<String> = []
-    /// The answer to the last menu action of each plugin.
-    public private(set) var pluginActionStatus: [String: String] = [:]
+    /// Which routine handles each kind and state.
+    public private(set) var handles = HandlesTable.empty
+    /// The run lifecycle of each routine. A missing routine is idle.
+    public internal(set) var lifecycles: [String: RunLifecycle] = [:]
+    /// The actionables with a transition in progress, as `plugin/item`, and the plugins with a plugin action in progress, as `plugin`.
+    public internal(set) var pendingActions: Set<String> = []
+    /// The answer to the last plugin action of each plugin.
+    public internal(set) var pluginActionStatus: [String: String] = [:]
     /// Why the app could not set up the workspace of the threads, or nil.
     public private(set) var workspaceProblem: String?
     /// Shows a macOS notification. The app sets it, because a host in a test has no app bundle.
     public var deliver: @MainActor @Sendable (HostNotification) -> Void = { _ in }
 
-    private let locks = LockService()
-    private let browser = BrowserService()
-    private var actionQueues: [String: Task<Void, Never>] = [:]
-    /// The time of the run that each plugin asked for with runSoon.
-    private var requestedRuns: [String: Date] = [:]
+    let now: @Sendable () -> Date
+    let runAgent: AgentRunner
+    let locks = LockService()
+    let browser = BrowserService()
+    var actionQueues: [String: Task<Void, Never>] = [:]
+    /// The trigger of the run that follows the current run of each routine.
+    var queuedRuns: [String: Trigger] = [:]
+    @ObservationIgnored var poller: Poller?
+    @ObservationIgnored var memoryRunning = false
     static let soonDelayRange = 1_000...3_600_000
     private var lastCheck = Date()
     private var timer: Timer?
     private var watcher: FolderWatcher?
-    private var asleep = false
+    var isAsleep = false
     private let prelude: String
 
-    public init(paths: HostPaths) {
+    /// The app passes the Keychain vault. Tests keep the allow list in memory.
+    public init(
+        paths: HostPaths, now: @escaping @Sendable () -> Date = Date.init, runAgent: AgentRunner? = nil, vault: AllowListVault = MemoryVault()
+    ) {
         self.paths = paths
-        board = BoardStore(dir: paths.file("board"))
+        self.now = now
+        self.runAgent = runAgent ?? .cli(home: paths.home)
+        actionables = ActionableStore(dir: paths.file("actionables"), now: now)
         notes = NotesStore(url: paths.file("notes.json"))
         settings = SettingsStore(url: paths.file("settings.json"))
         notifications = NotificationStore(url: paths.file("notifications.json"))
         pages = PageStore(dir: paths.file("pages"))
         runs = RunStore(paths: paths)
+        decisions = DecisionLog(dir: paths.file("decisions"))
+        allowList = AllowList(vault: vault)
+        cursors = CursorStore(dir: paths.file("sources"))
+        memory = MemoryStore(dir: paths.file("memory"), now: now)
         prelude = Prelude.source
-        board.retentionDays = { [weak self] id in
-            guard let self, let plugin = self.plugin(id) else { return DoneCards.defaultRetentionDays }
+        actionables.retentionDays = { [weak self] owner in
+            guard let self, let owner, let plugin = self.plugin(owner) else { return DoneCards.defaultRetentionDays }
             return self.settings.retentionDays(plugin.manifest)
         }
+        actionables.onStep = { [weak self] actionable, step in self?.stepAdded(step, of: actionable) }
     }
+
+    /// The plugins with a run in progress.
+    public var running: Set<String> { Set(lifecycles.filter { $0.value != .idle }.keys) }
+
+    /// The board calls of the plugins of today.
+    public var boardAdapter: BoardAdapter { BoardAdapter(store: actionables) }
 
     // MARK: Lifecycle
 
     public func start() {
         installWorkspace()
         reload()
+        Migration.run(boardDir: paths.file("board"), store: actionables)
+        decisions.prune(now: now())
         watchUserPlugins()
-        for plugin in plugins where plugin.manifest.runAtLaunch { runNow(plugin.id, trigger: "launch") }
+        for plugin in plugins where plugin.manifest.runAtLaunch { submit(.run(plugin.id, source: .clock, at: now())) }
         lastCheck = Date()
+        startPolling()
+        startMemory()
         // The timer also fires in a maintenance wake, which sleeps again within seconds. Only a full wake runs the missed slots.
         timer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
-            Task { @MainActor in if self?.asleep == false { self?.tick(now: Date()) } }
+            Task { @MainActor in if self?.isAsleep == false { self?.tick(now: Date()) } }
         }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.asleep = true }
+            Task { @MainActor in self?.isAsleep = true }
         }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                self?.asleep = false
+                self?.isAsleep = false
                 self?.tick(now: Date())
             }
         }
     }
 
+    /// Loads the plugins, then refuses the plugins whose kinds or handles another plugin already has (FR-009).
     public func reload() {
-        plugins = PluginCatalog.discover(in: paths.pluginDirs)
-        for plugin in plugins {
-            board.load(pluginId: plugin.id)
-            pages.load(pluginId: plugin.id)
+        let found = PluginCatalog.discover(in: paths.pluginDirs)
+        let built = Handles.build(found)
+        plugins = found.map { entry in
+            guard let problem = built.problems[entry.id] else { return entry }
+            var refused = entry
+            refused.problem = problem
+            return refused
         }
+        handles = built
+        for plugin in plugins { pages.load(pluginId: plugin.id) }
     }
 
     private func installWorkspace() {
@@ -97,34 +133,28 @@ public final class PluginHost {
         }
     }
 
-    /// Starts each plugin with a slot in the time since the last check. After a sleep, a plugin runs once, as with launchd.
-    public func tick(now: Date) {
+    /// Submits a clock trigger for each plugin with a slot in the time since the last check. After a sleep, a plugin runs once, as with launchd.
+    public func tick(now date: Date) {
         let after = lastCheck
-        lastCheck = now
-        for plugin in plugins { board.prune(pluginId: plugin.id) }
-        for plugin in plugins where Schedule.isDue(plugin.manifest.schedule, after: after, until: now) {
-            runNow(plugin.id, trigger: "schedule")
+        lastCheck = date
+        actionables.prune()
+        for plugin in plugins where Schedule.isDue(plugin.manifest.schedule, after: after, until: date) {
+            submit(.run(plugin.id, source: .clock, at: now()))
+        }
+        poller?.tick(now: date)
+    }
+
+    /// Asks for a run with the source `self` after the delay.
+    public func requestRun(_ id: String, delayMs: Int) {
+        let delay = min(max(delayMs, Self.soonDelayRange.lowerBound), Self.soonDelayRange.upperBound)
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(delay))
+            guard let self else { return }
+            self.submit(.run(id, source: .selfRequest, at: self.now()))
         }
     }
 
-    /// Runs an action that another program asked for, and writes the answer to its reply file. It shows no dialog.
-    public func performExternal(_ request: ExternalAction) {
-        let reply = { (text: String) in
-            guard let file = request.replyFile else { return }
-            try? FileManager.default.createDirectory(atPath: (file as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-            try? Data(text.utf8).write(to: URL(fileURLWithPath: file), options: .atomic)
-        }
-        guard let plugin = plugin(request.pluginId) else { return reply("Error: the plugin \(request.pluginId) does not exist") }
-        if case .failure(let error) = request.check(plugin.manifest, repliesDir: paths.file("replies").path) { return reply("Error: \(error)") }
-        performPluginAction(request.actionId, pluginId: request.pluginId, text: request.text) { result in
-            switch result {
-            case .success(let status): reply(status ?? "Done.")
-            case .failure(let error): reply("Error: \(error)")
-            }
-        }
-    }
-
-    // MARK: Done cards
+    // MARK: Done actionables
 
     public func retentionDays(_ id: String) -> Int {
         plugin(id).map { settings.retentionDays($0.manifest) } ?? DoneCards.defaultRetentionDays
@@ -132,7 +162,7 @@ public final class PluginHost {
 
     public func setRetentionDays(_ days: Int, pluginId: String) {
         settings.setRetentionDays(days, pluginId: pluginId)
-        board.prune(pluginId: pluginId)
+        actionables.prune()
     }
 
     public func plugin(_ id: String) -> PluginEntry? {
@@ -149,126 +179,19 @@ public final class PluginHost {
         return nil
     }
 
-    // MARK: Runs
-
-    public func runNow(_ id: String, trigger: String = "manual") {
-        guard let plugin = plugin(id) else { return }
-        // A blocked plugin shows its reason on its page, so a slot does not add a record each time.
-        if let blocker = blocker(id) {
-            if trigger != "schedule" { skip(id, trigger: trigger, reason: blocker) }
-            return
-        }
-        guard !running.contains(id) else { return skip(id, trigger: trigger, reason: "previous run still running") }
-        running.insert(id)
-        let record = runs.start(pluginId: id, kind: .run, trigger: trigger)
-        let context = Reply.json(RunContext(settings: settings.resolved(plugin.manifest), trigger: trigger))
-        Task {
-            let result = await call(plugin, function: "run", arguments: [context], logFile: record.logFile)
-            let (outcome, message) = Self.outcome(of: result)
-            runs.finish(record.id, outcome: outcome, message: message)
-            running.remove(id)
-            // A run that a plugin asked for during this run starts now, if its time passed.
-            if let at = requestedRuns[id], at <= Date() { startRequestedRun(id) }
-        }
-    }
-
-    // MARK: Requested runs
-
-    /// Keeps the earlier of two requests, so a batch of actions starts one run.
-    public func requestRun(_ id: String, delayMs: Int) {
-        let delay = min(max(delayMs, Self.soonDelayRange.lowerBound), Self.soonDelayRange.upperBound)
-        let at = Date().addingTimeInterval(Double(delay) / 1000)
-        if let current = requestedRuns[id], current <= at { return }
-        requestedRuns[id] = at
-        Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(delay))
-            self?.startRequestedRun(id)
-        }
-    }
-
-    private func startRequestedRun(_ id: String) {
-        guard let at = requestedRuns[id], at <= Date(), !running.contains(id) else { return }
-        requestedRuns[id] = nil
-        runNow(id, trigger: "soon")
-    }
-
-    private func skip(_ id: String, trigger: String, reason: String) {
-        let record = runs.start(pluginId: id, kind: .run, trigger: trigger)
-        let log = RunLog(path: record.logFile, pluginId: id)
-        log.write("skipped: \(reason)")
-        log.close()
-        runs.finish(record.id, outcome: .skipped, message: reason)
-    }
-
-    // MARK: Actions
-
-    /// The answer of an action: the status line of the plugin, or the reason that it failed.
-    public typealias ActionFinished = @MainActor (Result<String?, HostError>) -> Void
-
-    /// Finds an action in the manifest. A `cardId` asks for an item action of a stored item.
-    public func resolveAction(pluginId: String, cardId: String?, actionId: String) -> Result<ResolvedAction, HostError> {
-        guard let plugin = plugin(pluginId) else { return .failure(.failed("the plugin \(pluginId) does not exist")) }
-        let card = cardId.flatMap { board.card(pluginId, $0) }
-        return ActionLookup.resolve(actionId: actionId, cardId: cardId, pluginId: pluginId, manifest: plugin.manifest, card: card)
-    }
-
-    /// Runs a card action after the earlier actions of the same plugin. A run of the plugin does not block it.
-    public func perform(_ actionId: String, cardId: String, pluginId: String, text: String? = nil, finished: @escaping ActionFinished = { _ in }) {
-        let resolved = resolveAction(pluginId: pluginId, cardId: cardId, actionId: actionId)
-        if case .failure(let error) = resolved.flatMap({ ActionLookup.checkText($0.action, text: text) }) { return finished(.failure(error)) }
-        queueAction(
-            pluginId: pluginId, key: "\(pluginId)/\(cardId)", trigger: "\(cardId):\(actionId)", function: "onAction",
-            event: Reply.json(ActionEvent(cardId: cardId, actionId: actionId, text: text)),
-            show: { [weak self] status in self?.board.setStatus(status, cardId: cardId, pluginId: pluginId) },
-            finished: finished)
-    }
-
-    /// Runs an action of the plugin menu in the same queue as the card actions. The plugin page shows its answer.
-    public func performPluginAction(_ actionId: String, pluginId: String, text: String? = nil, finished: @escaping ActionFinished = { _ in }) {
-        let resolved = resolveAction(pluginId: pluginId, cardId: nil, actionId: actionId)
-        if case .failure(let error) = resolved.flatMap({ ActionLookup.checkText($0.action, text: text) }) { return finished(.failure(error)) }
-        queueAction(
-            pluginId: pluginId, key: pluginId, trigger: actionId, function: "onPluginAction",
-            event: Reply.json(PluginActionEvent(actionId: actionId, text: text)),
-            show: { [weak self] status in self?.pluginActionStatus[pluginId] = status },
-            finished: finished)
-    }
-
-    private func queueAction(
-        pluginId: String, key: String, trigger: String, function: String, event: String,
-        show: @escaping @MainActor (String?) -> Void, finished: @escaping ActionFinished
-    ) {
-        guard let plugin = plugin(pluginId) else { return finished(.failure(.failed("the plugin \(pluginId) does not exist"))) }
-        if let problem = plugin.problem {
-            show("Error: \(problem)")
-            return finished(.failure(.failed(problem)))
-        }
-        pendingActions.insert(key)
-        show("Working on it…")
-        let context = Reply.json(RunContext(settings: settings.resolved(plugin.manifest), trigger: "action"))
-        let previous = actionQueues[pluginId]
-        actionQueues[pluginId] = Task {
-            await previous?.value
-            let record = runs.start(pluginId: pluginId, kind: .action, trigger: trigger)
-            let result = await call(plugin, function: function, arguments: [event, context], logFile: record.logFile)
-            let (outcome, message) = Self.outcome(of: result)
-            runs.finish(record.id, outcome: outcome, message: message)
-            pendingActions.remove(key)
-            show(Self.status(of: result, outcome: outcome, message: message))
-            finished(outcome == .failed ? .failure(.failed(message ?? "the action failed")) : .success(message))
-        }
-    }
-
     // MARK: Calls
 
-    private func call(_ plugin: PluginEntry, function: String, arguments: [String], logFile: String) async -> Result<String?, HostError> {
+    func call(_ plugin: PluginEntry, function: String, arguments: [String], logFile: String, trigger: String) async -> Result<String?, HostError> {
         let log = RunLog(path: logFile, pluginId: plugin.id)
         let callId = UUID().uuidString
         let bridge = Bridge(
-            pluginId: plugin.id, callId: callId, check: permissionCheck(plugin), info: info(plugin), log: log,
+            pluginId: plugin.id, callId: callId, trigger: trigger, check: permissionCheck(plugin), info: info(plugin), log: log,
             services: HostServices(
-                locks: locks, browser: browser, board: board, notes: notes, notifications: notifications, pages: pages,
+                locks: locks, browser: browser, notes: notes, notifications: notifications, pages: pages,
                 activity: { [weak self] reader, since in self?.activity(reader: reader, since: since) ?? Activity(notifications: [], cards: [], failedRuns: []) },
+                actionables: { [weak self] pluginId, trigger, request in
+                    self?.handle(request, pluginId: pluginId, trigger: trigger) ?? .failure(.failed("the app quit"))
+                },
                 deliver: deliver, runLater: { [weak self] id, delayMs in self?.requestRun(id, delayMs: delayMs) }))
         let runtime = PluginRuntime(bridge: bridge)
         let bundle = (try? String(contentsOfFile: plugin.bundlePath, encoding: .utf8)) ?? ""
@@ -290,13 +213,16 @@ public final class PluginHost {
     }
 
     private func activity(reader: String, since: Date) -> Activity {
-        Activity.since(
+        let cards = Dictionary(grouping: actionables.all.filter { $0.owner != nil }, by: { $0.owner! }).mapValues { list in list.map { $0.card(id: $0.id) } }
+        return Activity.since(
             since, reader: reader, names: Dictionary(plugins.map { ($0.id, $0.manifest.name) }, uniquingKeysWith: { first, _ in first }),
-            cards: board.cards, notifications: notifications.items, runs: runs.records)
+            cards: cards, notifications: notifications.items, runs: runs.records)
     }
 
     private func permissionCheck(_ plugin: PluginEntry) -> PermissionCheck {
-        PermissionCheck(permissions: plugin.manifest.permissions, home: paths.home, alwaysAllowed: [paths.stateDir, plugin.dir, paths.dataDir])
+        PermissionCheck(
+            permissions: plugin.manifest.permissions, home: paths.home, alwaysAllowed: [paths.stateDir, plugin.dir, paths.dataDir],
+            protected: PermissionCheck.hostFiles(dataDir: paths.dataDir))
     }
 
     private func info(_ plugin: PluginEntry) -> [String: String] {
@@ -304,6 +230,12 @@ public final class PluginHost {
             "pluginId": plugin.id, "pluginDir": plugin.dir, "stateDir": paths.stateDir, "dataDir": paths.dataDir, "home": paths.home,
             "guardCommand": paths.guardCommand, "appCommand": paths.guardCommand, "timeZone": TimeZone.current.identifier,
         ]
+    }
+
+    func context(_ plugin: PluginEntry, trigger: Trigger) -> String {
+        Reply.json(
+            RunContext(
+                settings: settings.resolved(plugin.manifest), trigger: trigger.legacyName, source: trigger.source.rawValue, actionable: trigger.actionable))
     }
 
     /// A value `{ ok: false, error }` from the plugin counts as a failure, the same as a thrown error.
@@ -319,16 +251,14 @@ public final class PluginHost {
             return (ok ? .succeeded : .failed, nil)
         }
     }
-
-    private static func status(of result: Result<String?, HostError>, outcome: RunRecord.Outcome, message: String?) -> String? {
-        if outcome == .failed { return "Error: \(message ?? "the action failed")" }
-        return message
-    }
 }
 
 struct RunContext: Encodable {
     var settings: [String: String]
+    /// The string of today: clock is "schedule", self is "soon", ui is "action".
     var trigger: String
+    var source: String
+    var actionable: String?
 }
 
 struct ActionEvent: Encodable {

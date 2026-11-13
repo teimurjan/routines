@@ -4,27 +4,28 @@ import Foundation
 public final class HostServices: Sendable {
     let locks: LockService
     let browser: BrowserService
-    private let boardStore: BoardStore
     private let notesStore: NotesStore
     private let notificationStore: NotificationStore
     private let pageStore: PageStore
     private let activity: @MainActor @Sendable (String, Date) -> Activity
+    private let actionables: @MainActor @Sendable (String, String, ActionableCall) -> Result<String, HostError>
     private let deliver: @MainActor @Sendable (HostNotification) -> Void
     private let runLater: @MainActor @Sendable (String, Int) -> Void
 
     @MainActor
     init(
-        locks: LockService, browser: BrowserService, board: BoardStore, notes: NotesStore, notifications: NotificationStore,
+        locks: LockService, browser: BrowserService, notes: NotesStore, notifications: NotificationStore,
         pages: PageStore, activity: @escaping @MainActor @Sendable (String, Date) -> Activity,
+        actionables: @escaping @MainActor @Sendable (String, String, ActionableCall) -> Result<String, HostError> = { _, _, _ in .failure(.failed("no actionables")) },
         deliver: @escaping @MainActor @Sendable (HostNotification) -> Void, runLater: @escaping @MainActor @Sendable (String, Int) -> Void = { _, _ in }
     ) {
         self.locks = locks
         self.browser = browser
-        boardStore = board
         notesStore = notes
         notificationStore = notifications
         pageStore = pages
         self.activity = activity
+        self.actionables = actionables
         self.deliver = deliver
         self.runLater = runLater
     }
@@ -33,8 +34,9 @@ public final class HostServices: Sendable {
         await MainActor.run { runLater(pluginId, delayMs) }
     }
 
-    func board<T: Sendable>(_ work: @MainActor @Sendable (BoardStore) -> T) async -> T {
-        await MainActor.run { work(boardStore) }
+    /// `trigger` is the id of the decision that started the call, so each step names it.
+    func actionables(pluginId: String, trigger: String, _ call: ActionableCall) async -> Result<String, HostError> {
+        await MainActor.run { actionables(pluginId, trigger, call) }
     }
 
     func notes<T: Sendable>(_ work: @MainActor @Sendable (NotesStore) -> T) async -> T {

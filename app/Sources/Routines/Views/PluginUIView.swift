@@ -30,7 +30,7 @@ struct PluginUIView: View {
             }
         }
         .task(id: plugin.id) {
-            let created = PluginUIController(plugin: plugin, host: model.host)
+            let created = PluginUIController(plugin: plugin, host: model.host) { cardId in model.askAbout(pluginId: plugin.id, cardId: cardId) }
             controller = created
             takeFocus()
             await created.start()
@@ -42,7 +42,7 @@ struct PluginUIView: View {
     /// The controller sends the item after `ready`, so a request from before the page loads still arrives.
     private func takeFocus() {
         guard let controller, let focus = model.uiFocus, focus.pluginId == plugin.id else { return }
-        controller.focus(cardId: focus.card.id)
+        controller.focus(cardId: focus.itemId)
         model.uiFocus = nil
     }
 }
@@ -78,17 +78,21 @@ final class PluginUIController {
     @ObservationIgnored private var focusAfterReady: String?
     @ObservationIgnored private var appearance = PluginUISnapshot.Appearance(scheme: .light, accent: AccentColor.hex())
 
-    init(plugin: PluginEntry, host: PluginHost) {
+    /// `ask` gets the id of an item that you Command-clicked.
+    init(plugin: PluginEntry, host: PluginHost, ask: @escaping @MainActor (String) -> Void) {
         pluginId = plugin.id
         self.host = host
         // The closures run on the main actor after init, so they reach the controller through a weak box.
         let box = WeakBox<PluginUIController>()
         web = PluginWebView(
             plugin: plugin, background: NSColor(Theme.canvas),
-            listedImages: { PluginUIResources.listedImages(host.board.cards(of: plugin.id)) },
+            listedImages: { PluginUIResources.listedImages(host.actionables.owned(by: plugin.id).map { $0.card(id: $0.id) }) },
             respond: { body in await box.value?.respond(body) ?? .failure(.failed("the plugin UI closed")) })
         box.value = self
         web.onLoadError = { [weak self] reason in self?.phase = .failed(reason) }
+        web.onAsk = { [host, pluginId = plugin.id] cardId in
+            if host.item(pluginId: pluginId, itemId: cardId) != nil { ask(cardId) }
+        }
     }
 
     /// Loads the page, then shows it after `ready` or after 1 second.
@@ -110,6 +114,7 @@ final class PluginUIController {
         guard ready, snapshot != sent else { return }
         sent = snapshot
         Task { await web.send(type: "snapshot", valueJSON: snapshot) }
+        pushCardIds()
     }
 
     func focus(cardId: String) {
@@ -120,7 +125,8 @@ final class PluginUIController {
     private func respond(_ body: Data) async -> Result<String, HostError> {
         guard let plugin = host.plugin(pluginId) else { return .failure(.failed("the plugin \(pluginId) is gone")) }
         let decision = PluginUIBridge(pluginId: pluginId).decide(
-            body, manifest: plugin.manifest, card: { [host, pluginId] in host.board.card(pluginId, $0) }, snapshot: { snapshotJSON(appearance) })
+            body, manifest: plugin.manifest, card: { [host, pluginId] in host.boardAdapter.card(pluginId, $0) },
+            actionable: { [host, pluginId] in host.actionables.actionable($0).flatMap { $0.owner == pluginId ? $0 : nil } }, snapshot: { snapshotJSON(appearance) })
         switch decision {
         case .reply(let json):
             sent = json
@@ -141,9 +147,16 @@ final class PluginUIController {
         await ActionGate.run(request, pluginId: pluginId, title: title, host: host).map(Self.statusJSON)
     }
 
+    private func pushCardIds() {
+        let ids = host.uiSnapshot(pluginId: pluginId, appearance: appearance)?.items.map(\.id) ?? []
+        Task { await web.setCardIds(ids) }
+    }
+
     private func becomeReady() {
         ready = true
         show()
+        // The first snapshot went out as a reply, so the ids of its items go here.
+        pushCardIds()
         // A change between the first snapshot and `ready` reaches the page here.
         push(snapshot: snapshotJSON(appearance), appearance: appearance)
         if let cardId = focusAfterReady {

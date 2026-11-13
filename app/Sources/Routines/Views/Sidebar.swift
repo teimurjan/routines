@@ -14,9 +14,8 @@ struct Sidebar: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 2) {
                 brand.padding(.bottom, 14)
-                row(.inbox, title: "Inbox", icon: "tray", badge: model.needsYouCount)
-                row(.threads, title: "Threads", icon: "bubble.left.and.text.bubble.right", badge: model.threads.runningCount)
                 row(.runs, title: "Runs", icon: "clock.arrow.circlepath", badge: model.host.running.count)
+                row(.memory, title: "Memory", icon: "brain", badge: 0)
                 SearchField(text: $query, prompt: "Search routines", width: nil).padding(.top, 22)
                 if !pinned.isEmpty {
                     section("PINNED")
@@ -109,7 +108,7 @@ private struct PluginRow: View {
     var plugin: PluginEntry
 
     var body: some View {
-        let waiting = model.host.board.cards(of: plugin.id).count { $0.column == .needsYou }
+        let waiting = model.routineThread(.routine(plugin.id)).count
         let pinned = model.host.settings.isPinned(plugin.id)
         SidebarButton(item: .plugin(plugin.id)) {
             PluginMark(plugin: plugin, size: 15).frame(width: 20)
@@ -117,7 +116,7 @@ private struct PluginRow: View {
             Spacer()
             if model.host.running.contains(plugin.id) {
                 ProgressView().controlSize(.mini)
-            } else if plugin.problem != nil || model.host.board.errors[plugin.id] != nil {
+            } else if plugin.problem != nil {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.warning).help(plugin.problem ?? "")
             } else if !model.host.settings.isEnabled(plugin.id) {
                 Image(systemName: "pause.circle").foregroundStyle(Theme.faint)

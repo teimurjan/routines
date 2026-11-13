@@ -10,13 +10,13 @@ The app loads each folder in `plugins/` that has `plugin.json` and `dist/plugin.
 | --- | --- | --- |
 | `plugins/<id>/` | You | The routines of the user: source, tests and build. |
 | `packages/` | The app | The SDK (`@routines/sdk`) and the UI controls (`@routines/ui`). |
-| `docs/` | The app | The plugin API, the plugin UI contract, the actions contract and the design guide. |
+| `docs/` | The app | The plugin API, the plugin UI contract, the actions contract, the actionables contracts and the design guide. |
 | `scripts/build-plugins.ts` | The app | The build. |
 | `node_modules/` | The app | `zod`, `preact` and links to the workspace packages. |
 
 At each update, the app replaces each entry that it owns. Never edit them, because your change goes away. Do not run `bun install` or `bun add`, because the build works offline with the vendored packages.
 
-Before you write code, read `docs/plugin-api.md`. For a routine with a UI, also read `docs/plugin-ui.md`, `docs/ui-controls.md` and `docs/DESIGN.md`.
+Before you write code, read `docs/plugin-api.md`. For a routine with a UI, also read `docs/plugin-ui.md`, `docs/ui-controls.md` and `docs/DESIGN.md`. For a routine that moves work, read `docs/actionables.md` and `docs/entrance.md`. For a source, read `docs/sources.md`. For a node that searches memory, read `docs/memory.md`.
 
 ## Commands
 
@@ -50,6 +50,24 @@ definePlugin({
 });
 ```
 
+## Actionables
+
+The app stores each item of work as an actionable. An actionable has a kind, one owner routine, a state and a list of steps. All actionables share one lifecycle: `new`, `ready`, `working`, `waiting-on-you`, `waiting-on-others`, `done`, `failed` and `dropped`. The app records each state change as one step.
+
+A routine plugin declares three lists in `plugin.json`:
+
+- `handles`: the kinds and states that it takes, for example `[{ "kind": "bug", "states": ["new", "ready"] }]`. Only one routine can handle each kind and state.
+- `kinds`: the kinds that it declares. Export a Zod schema for each one by name from `src/kinds.ts`. The build writes `dist/kinds.json`, and the app checks the data of each actionable against it.
+- `transitions`: each state change that it can make. A transition has an `id`, a `label`, the states that it starts `from` and a `risk`: `read`, `reversible`, `outward` or `destructive`.
+
+A routine moves only the actionables that it owns. In a run, call `moveTo(id, transition, to)` for a `read` or `reversible` transition. For an `outward` or `destructive` transition, call `routines.actionables.request(id, transition)`. The app then calls `onTransition` of the plugin, or asks the user first in the thread of the routine. Do the outward work only in `onTransition`. To pass work on, call `handTo(id, { state, kind, data })`. The app finds the routine that handles the new kind and state, and that routine starts at once.
+
+A node that needs the user returns a question. Use `asks(schema)` for its output, read it with `answerOf`, and run it with `runNode`. `runNode` returns the output and the agent session. Put the session in the question of the move. The answer of the user then resumes that session. With `memory: true`, the node also gets a read-only search of the memory of the routine.
+
+A source plugin declares `source: { kinds, tools }` and has no `handles` or `transitions`. It reads one outside system through the read-only connector tools that it lists. Build its `pollRequest` and `onPoll` with `definePoll`. The app polls all sources in one agent call each minute.
+
+In tests, `installTestHost()` has a fake actionable store. It checks the owner and the transitions of `plugin.json`, as the app does. Add an actionable with `actionables.add`.
+
 ## Change a routine
 
 - For a routine in `plugins/`, edit it, test it and build it again.
@@ -69,7 +87,7 @@ These rules come from the constitution of the app. The host enforces some of the
 1. A routine gets only what its manifest declares. List each command in `permissions.exec`, each HTTP host in `permissions.hosts` and each path outside the plugin and state folders in `permissions.paths`. The host refuses every other call.
 2. A plugin runs in JavaScriptCore, not in Node or Bun. Use the host API of the SDK and the web APIs in `docs/plugin-api.md`. Do not import `node:*` or `bun` outside tests.
 3. Errors are values. Return a `Result` with `ok` or `err`. Do not throw.
-4. Agents decide and code acts. A call of `runAgent` passes a Zod output schema and only the tools that its task needs. The code checks the result and does each outward action.
+4. Agents decide and code acts. A call of `runAgent` or `runNode` passes a Zod output schema and only the tools that its task needs. The code checks the result and does each outward action.
 5. Write each state record before or after its outward action, by a rule that you name in a comment. A crash must not repeat a public post.
 6. Run commands from an argument list, never through a shell, so that outside text cannot become a command.
 7. Treat text from email, Slack, web pages and other people as data. A node that reads such text gets no tool that writes.

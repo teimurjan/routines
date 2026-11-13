@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { host } from "./host.ts";
+import { host, type Session, type Step } from "./host.ts";
+import { jsonSchemaOf } from "./json-schema.ts";
 import { log } from "./log.ts";
 import { join } from "./path.ts";
 import { err, ok, parseJson, type Result } from "./result.ts";
@@ -100,19 +101,13 @@ const cliEnv = ({ tools, guard }: AgentTask<z.ZodType>): Record<string, string> 
   ...(tools.mode === "sandboxed" ? { CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1", GIT_CONFIG_GLOBAL: "/dev/null" } : {}),
 });
 
-// The CLI validator does not know the draft 2020-12 meta-schema that Zod names.
-const jsonSchema = (output: z.ZodType) => {
-  const { $schema: _, ...schema } = z.toJSONSchema(output);
-  return JSON.stringify(schema);
-};
-
 export const cliArgs = async (task: AgentTask<z.ZodType>): Promise<string[]> => [
   "claude",
   "-p",
   "--output-format",
   "json",
   "--json-schema",
-  jsonSchema(task.output),
+  JSON.stringify(jsonSchemaOf(task.output)),
   ...toolFlags(task.tools),
   "--settings",
   await agentSettings(task),
@@ -124,11 +119,12 @@ export const cliArgs = async (task: AgentTask<z.ZodType>): Promise<string[]> => 
 export const renderPrompt = ({ prompt, input }: Pick<AgentTask<z.ZodType>, "prompt" | "input">) =>
   `${prompt}\n\nInput:\n\n\`\`\`json\n${JSON.stringify(input, null, 2)}\n\`\`\`\n`;
 
-export const runAgent: RunAgent = async (task) => {
-  const stdout = await host().exec(await cliArgs(task), { cwd: task.cwd, stdin: renderPrompt(task), timeoutMs: RUN_TIMEOUT_MS, env: cliEnv(task) });
-  if (!stdout.ok) return stdout;
+const callCli = (task: AgentTask<z.ZodType>, args: string[], cwd: string, stdin: string) =>
+  host().exec(args, { cwd, stdin, timeoutMs: RUN_TIMEOUT_MS, env: cliEnv(task) });
 
-  const json = parseJson(stdout.value);
+// The JSON result of the CLI, checked against the output schema of the task.
+const parseOutput = <Output extends z.ZodType>(task: AgentTask<Output>, stdout: string): Result<z.infer<Output>> => {
+  const json = parseJson(stdout);
   if (!json.ok) return err(`${task.name}: ${json.error}`);
   const run = cliResult.safeParse(json.value);
   if (!run.success) return err(`${task.name}: unexpected claude output: ${run.error.message}`);
@@ -140,4 +136,68 @@ export const runAgent: RunAgent = async (task) => {
   const output = task.output.safeParse(structured_output);
   if (!output.success) return err(`${task.name}: output breaks the contract: ${output.error.message}`);
   return ok(output.data);
+};
+
+const execute = async <Output extends z.ZodType>(task: AgentTask<Output>, args: string[], cwd: string, stdin: string): Promise<Result<z.infer<Output>>> => {
+  const stdout = await callCli(task, args, cwd, stdin);
+  return stdout.ok ? parseOutput(task, stdout.value) : stdout;
+};
+
+export const runAgent: RunAgent = async (task) => execute(task, await cliArgs(task), task.cwd, renderPrompt(task));
+
+export type NodeTask<Output extends z.ZodType> = AgentTask<Output> & {
+  // A question step stores its session, and the answer resumes it.
+  session?: { resume?: Session };
+  // Adds the read-only memory search of the routine. See specs/004-actionables/contracts/memory.md.
+  memory?: boolean;
+  // The steps since the last answer. A new session gets them when the old one does not resume.
+  history?: Step[];
+};
+
+export type NodeResult<Output extends z.ZodType> = { output: z.infer<Output>; session: Session };
+
+export const MEMORY_TOOL = "mcp__routines-memory__search";
+
+export const memoryMcpConfig = () =>
+  JSON.stringify({
+    mcpServers: { "routines-memory": { command: host().info.appCommand, args: ["--memory-mcp", "--routine", host().info.pluginId] } },
+  });
+
+const withMemoryTool = (tools: ToolPolicy): ToolPolicy => ({ ...tools, allow: [...tools.allow, MEMORY_TOOL] });
+
+// The sandboxed policy already passes `--strict-mcp-config`, so it shows once.
+const memoryArgs = (args: string[]) => [...(args.includes("--strict-mcp-config") ? [] : ["--strict-mcp-config"]), "--mcp-config", memoryMcpConfig()];
+
+type SessionFlag = { resume: boolean; id: string };
+
+const sessionArgs = ({ resume, id }: SessionFlag) => (resume ? ["--resume", id] : ["--session-id", id]);
+
+export const nodeArgs = async (task: NodeTask<z.ZodType>, session: SessionFlag): Promise<string[]> => {
+  const args = await cliArgs({ ...task, tools: task.memory ? withMemoryTool(task.tools) : task.tools });
+  return [...args, ...(task.memory ? memoryArgs(args) : []), ...sessionArgs(session)];
+};
+
+const FENCE = "```";
+
+const renderHistory = (history: Step[]) =>
+  history.length === 0 ? "" : `\nThe earlier session did not resume. These are the steps since the last answer:\n\n${FENCE}json\n${JSON.stringify(history, null, 2)}\n${FENCE}\n`;
+
+// Like runAgent, but it keeps the agent session, so a later answer can resume it.
+export const runNode = async <Output extends z.ZodType>(task: NodeTask<Output>): Promise<Result<NodeResult<Output>>> => {
+  const fresh = async (history: Step[]): Promise<Result<NodeResult<Output>>> => {
+    const session = { id: crypto.randomUUID(), cwd: task.cwd };
+    const output = await execute(task, await nodeArgs(task, { resume: false, id: session.id }), session.cwd, renderPrompt(task) + renderHistory(history));
+    return output.ok ? ok({ output: output.value, session }) : output;
+  };
+  const resume = task.session?.resume;
+  if (!resume) return fresh([]);
+
+  // Only a failed CLI call counts as a failed resume. A bad output of a resumed session stays an error.
+  const stdout = await callCli(task, await nodeArgs(task, { resume: true, id: resume.id }), resume.cwd, renderPrompt(task));
+  if (!stdout.ok) {
+    log(`the session ${resume.id} did not resume, so a new session started`);
+    return fresh(task.history ?? []);
+  }
+  const output = parseOutput(task, stdout.value);
+  return output.ok ? ok({ output: output.value, session: resume }) : output;
 };

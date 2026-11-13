@@ -1,6 +1,6 @@
 # Routines Constitution
 
-Routines is a macOS app that runs scheduled jobs with AI agents on one Mac. A Swift host runs plugins written in JavaScript. Each plugin shows its work in a UI of its own, and the Inbox lists all work that needs you. Code and tests cite these rules by number.
+Routines is a macOS app that runs scheduled jobs with AI agents on one Mac. A Swift host runs plugins written in JavaScript. The host stores the work of all plugins as actionables. Each plugin shows its work in a UI of its own, and each routine asks you in its own thread. Code and tests cite these rules by number.
 
 ## Core Principles
 
@@ -34,17 +34,25 @@ A plugin writes each record before the outward action that it records, or after 
 
 Why: a crash must not repeat a public post or forget earlier work. Check: the ledger tests of each plugin.
 
-### R6. The host owns the control surface
+### R6. The host owns the work and the control surface
 
-Each plugin shows its items in its own UI, and the Inbox lists each item that needs you. A plugin UI reaches only the items, the page and the actions of its own plugin. The manifest lists each action of a plugin, with its target: one item or the plugin. An item carries no actions, and the app draws no action control of its own. Each press goes through one host gate. The host finds the action in the manifest and checks its target, its item and its text. For an action with `confirm: true`, the host asks you first in its own dialog. Notifications and Inbox rows open an item in its plugin UI.
+The host stores each actionable, with its owner, its state and its steps. A plugin moves only the actionables that it owns, and only by a transition of its manifest. Each request goes through one entrance and one policy, and each refusal has one text for each caller. A routine asks you in its own thread, and the routine threads replace the Inbox.
 
-Why: one place lists all work that needs you, and a page cannot call an unlisted action or skip the dialog. Check: `ActionLookupTests`, `PluginUIBridgeTests`, `NativeActionsGoneTests` and `PluginUIWebKitTests`.
+A plugin UI reaches only the actionables, the page and the actions of its own plugin. The manifest lists each action and each transition. The app draws no action control of its own. Each press goes through one host gate. For an action or a transition with `confirm: true`, the host asks you first in its own dialog. Notifications open a question in its routine thread.
+
+Why: one record holds all work, so a routine can hand work to another, and one place lists each question to you. A page or a script cannot skip the policy or the dialog. Check: `PolicyTests`, `RoutineThreadTests`, `PluginUIBridgeTests`, `NativeActionsGoneTests` and `PluginUIWebKitTests`.
 
 ### R7. Plain code over frameworks
 
 The host uses only Apple frameworks. A plugin bundles its own dependencies. A new dependency needs a reason in `research.md`.
 
 Why: fewer parts to audit and to update. Check: `Package.swift` has no package dependencies.
+
+### R8. Memory informs and never permits
+
+A memory entry can change what a node decides. It cannot grant a permission, change an allow list or change a manifest. Only you change an allow list, in the app. An `outward` or `destructive` transition needs your press, your answer or an entry in the allow list.
+
+Why: memory comes from text that other people wrote, so a crafted message must not make a routine post, merge or delete alone. Check: `RiskTests`.
 
 ## Constraints
 
@@ -66,4 +74,6 @@ Version 2.0.0 redefined R6, because plugins can ship their own UI. See `specs/00
 
 Version 3.0.0 redefines R6 again. The board and the card buttons are gone, each plugin shows only its UI, and the manifest is the only list of actions. See `specs/003-custom-ui-everywhere/`.
 
-**Version**: 3.0.0 | **Ratified**: 2026-11-09 | **Last Amended**: 2026-11-09
+Version 4.0.0 redefines R6 and adds R8. The host owns the actionables, one entrance decides each request, and the routine threads replace the Inbox. See `specs/004-actionables/`.
+
+**Version**: 4.0.0 | **Ratified**: 2026-11-09 | **Last Amended**: 2026-11-13

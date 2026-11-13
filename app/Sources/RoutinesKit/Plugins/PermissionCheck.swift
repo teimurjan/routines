@@ -6,11 +6,19 @@ public struct PermissionCheck: Sendable {
     public let home: String
     /// Folders that each plugin can use: the shared state folder, its own folder and the app data folder.
     public let alwaysAllowed: [String]
+    /// The host files in the data folder. A plugin reads them, but only the host writes them.
+    public let protected: [String]
 
-    public init(permissions: Permissions, home: String, alwaysAllowed: [String]) {
+    public init(permissions: Permissions, home: String, alwaysAllowed: [String], protected: [String] = []) {
         self.permissions = permissions
         self.home = home
         self.alwaysAllowed = alwaysAllowed
+        self.protected = protected
+    }
+
+    /// The files and folders of the data folder that the host owns.
+    public static func hostFiles(dataDir: String) -> [String] {
+        ["actionables", "memory", "decisions", "board", "sources", "settings.json"].map { (dataDir as NSString).appendingPathComponent($0) }
     }
 
     // `env` runs the command after its options and variables, so that command needs a permission too.
@@ -55,6 +63,15 @@ public struct PermissionCheck: Sendable {
         let roots = (alwaysAllowed + permissions.paths.map(expand)).map(Self.resolve)
         let allowed = roots.contains { root in path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/") }
         return allowed ? .success(path) : .failure(.denied("the path \(raw) is not in permissions.paths"))
+    }
+
+    /// A path for a write. A host file and a path in a host folder are refused, and a delete also refuses a folder that holds one.
+    public func writablePath(_ raw: String, removing: Bool = false) -> Result<String, HostError> {
+        path(raw).flatMap { path in
+            let inside = { (root: String) in path == root || path.hasPrefix(root + "/") || (removing && root.hasPrefix(path + "/")) }
+            guard let owned = protected.map(Self.resolve).first(where: inside) else { return .success(path) }
+            return .failure(.denied("the host owns \(owned)"))
+        }
     }
 
     public func browser() -> Result<Void, HostError> {

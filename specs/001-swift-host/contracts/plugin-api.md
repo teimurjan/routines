@@ -73,7 +73,7 @@ The script bundles `src/index.ts` into one IIFE file for the browser target, wit
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `id` | string | Required. | Must match the folder name. |
-| `name` | string | Required. | The name in the sidebar, the Inbox and the notifications. |
+| `name` | string | Required. | The name in the sidebar, the routine threads and the notifications. |
 | `description` | string | `""` | One line under the name on the plugin page. |
 | `color` | `#RRGGBB` | `#6B7280` | The dot of a plugin without an emoji. The plugin UI gets it in its snapshot. |
 | `icon` | string | `puzzlepiece` | An SF Symbols name. The host reads it, but the app does not draw it. |
@@ -87,7 +87,7 @@ The script bundles `src/index.ts` into one IIFE file for the browser target, wit
 | `doneCards` | `{ retentionDays }` | `{ "retentionDays": 14 }` | When the host deletes the done and failed cards. A negative value counts as 0. |
 | `actions` | actions | `[]` | Each action of the plugin. |
 | `ui` | `{ title }` | none | The plugin ships `dist/ui`. Its page shows the UI as the first tab, with the label `title`. |
-| `hidden` | boolean | `false` | The sidebar leaves the plugin out. It still runs, and the Inbox lists its items. |
+| `hidden` | boolean | `false` | The sidebar leaves the plugin out. It still runs, and its routine thread still lists its questions. |
 
 The host ignores keys that it does not know. A manifest that does not parse, an `id` that does not match the folder and a missing bundle each make a plugin with a problem. The sidebar shows a warning, the Settings tab shows the problem, and the plugin does not run.
 
@@ -281,16 +281,16 @@ A card is one item of work of the plugin. Its column is its state.
 | --- | --- |
 | `id`, `title` | Required. The id is unique in the plugin. |
 | `column` | `planned`, `working`, `needs-you`, `done` or `failed`. |
-| `body` | Markdown. The Inbox shows its first line. |
+| `body` | Markdown. The plugin UI shows it. |
 | `progress` | From 0 to 1. |
-| `date` | An ISO 8601 time or day. The Inbox shows it, or the time of the last change. |
-| `tags` | Labels. The Inbox search matches them. |
+| `date` | An ISO 8601 time or day. The plugin UI shows it, or the time of the last change. |
+| `tags` | Labels. |
 | `links` | `{ label, url }` links. |
 | `images` | Absolute paths of image files. The plugin UI can load only an image that a card of its plugin lists. |
 | `status` | One line under the body, for example the answer to the last action. |
 | `data` | A JSON object for the UI of the plugin. The host stores it and does not read it. If it is larger than 32 KB as JSON, the upsert fails. |
 
-The host sets `updatedAt` on each write. The Inbox lists each card in `needs-you`, newest first. The plugin UI gets the cards of its plugin in its snapshot.
+The host sets `updatedAt` on each write. Each card is an actionable with the plugin as owner, and its column maps to a state (`specs/004-actionables/data-model.md`). `board.remove` moves it to `dropped`. The plugin UI gets the cards of its plugin in its snapshot.
 
 After `retentionDays` from its last change, the host deletes a card in `done` or `failed`. 0 keeps the cards. You can choose another retention in the Settings tab. Do not depend on a closed card that stays in the store.
 

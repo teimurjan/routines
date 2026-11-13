@@ -65,6 +65,19 @@ struct PermissionTests {
         #expect((try? check.path("relative/path").get()) == nil)
     }
 
+    @Test func aPluginReadsButDoesNotWriteTheHostFiles() throws {
+        let data = FileManager.default.temporaryDirectory.appendingPathComponent("data-\(UUID().uuidString)").path
+        let guarded = PermissionCheck(
+            permissions: Permissions(paths: [data]), home: "/Users/me", alwaysAllowed: [], protected: PermissionCheck.hostFiles(dataDir: data))
+        #expect((try? guarded.path(data + "/actionables/1.json").get()) != nil)
+        #expect(throws: HostError.self) { try guarded.writablePath(data + "/actionables/1.json").get() }
+        #expect(throws: HostError.self) { try guarded.writablePath(data + "/settings.json").get() }
+        #expect(throws: HostError.self) { try guarded.writablePath(data, removing: true).get() }
+        #expect((try? guarded.writablePath(data + "/mine/notes.txt").get()) != nil)
+        guard case .failure(let error) = guarded.writablePath(data + "/memory/entries.json") else { return }
+        #expect(error.description.contains("the host owns"))
+    }
+
     @Test func aSymbolicLinkCannotLeaveARoot() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("perm-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -75,64 +88,80 @@ struct PermissionTests {
     }
 }
 
+/// The board calls of the plugins of today keep working on actionables (research.md, section 16).
 @MainActor
-struct BoardStoreTests {
+struct BoardAdapterTests {
     private func dir() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent("board-\(UUID().uuidString)") }
 
     @Test func anUpsertKeepsThePlaceOfTheCard() {
-        let store = BoardStore(dir: dir())
-        store.load(pluginId: "p")
-        _ = store.upsert(Card(id: "a", title: "A", column: .planned), pluginId: "p")
-        _ = store.upsert(Card(id: "b", title: "B", column: .planned), pluginId: "p")
-        _ = store.upsert(Card(id: "a", title: "A2", column: .done), pluginId: "p")
-        #expect(store.cards(of: "p").map(\.title) == ["A2", "B"])
+        let board = BoardAdapter(store: ActionableStore(dir: dir()))
+        board.upsert(Card(id: "a", title: "A", column: .planned), pluginId: "p", trigger: "t")
+        board.upsert(Card(id: "b", title: "B", column: .planned), pluginId: "p", trigger: "t")
+        board.upsert(Card(id: "a", title: "A2", column: .done), pluginId: "p", trigger: "t")
+        #expect(board.cards(of: "p").map(\.title) == ["A2", "B"])
+    }
+
+    @Test func aNewColumnAddsABoardStepAndTheSameColumnAddsNone() throws {
+        let store = ActionableStore(dir: dir())
+        let board = BoardAdapter(store: store)
+        board.upsert(Card(id: "a", title: "A", column: .planned), pluginId: "p", trigger: "t")
+        board.upsert(Card(id: "a", title: "A again", column: .planned), pluginId: "p", trigger: "t")
+        board.upsert(Card(id: "a", title: "A", column: .needsYou), pluginId: "p", trigger: "t")
+        let actionable = try #require(store.find(source: "p", key: "a"))
+        #expect(actionable.steps.map(\.action) == [.created, .board])
+        #expect(actionable.state == .waitingOnYou)
+        #expect(actionable.owner == "p" && actionable.kind == "p")
+    }
+
+    @Test func aRemovedCardIsDroppedAndLeavesTheBoard() throws {
+        let store = ActionableStore(dir: dir())
+        let board = BoardAdapter(store: store)
+        board.upsert(Card(id: "a", title: "A", column: .planned), pluginId: "p", trigger: "t")
+        _ = board.remove("a", pluginId: "p", trigger: "t")
+        #expect(board.cards(of: "p").isEmpty)
+        #expect(store.find(source: "p", key: "a")?.state == .dropped)
     }
 
     @Test func oldDoneCardsGoAway() {
-        var clock = Date()
-        let store = BoardStore(dir: dir(), now: { clock })
-        store.load(pluginId: "p")
-        _ = store.upsert(Card(id: "old", title: "Old", column: .done), pluginId: "p")
-        _ = store.upsert(Card(id: "open", title: "Open", column: .needsYou), pluginId: "p")
-        clock = clock.addingTimeInterval(15 * 24 * 60 * 60)
-        _ = store.upsert(Card(id: "new", title: "New", column: .planned), pluginId: "p")
-        #expect(store.cards(of: "p").map(\.id) == ["open", "new"])
+        let clock = FakeClock()
+        let store = ActionableStore(dir: dir(), now: clock.function)
+        let board = BoardAdapter(store: store)
+        board.upsert(Card(id: "old", title: "Old", column: .done), pluginId: "p", trigger: "t")
+        board.upsert(Card(id: "open", title: "Open", column: .needsYou), pluginId: "p", trigger: "t")
+        clock.advance(15 * 24 * 60 * 60)
+        board.upsert(Card(id: "new", title: "New", column: .planned), pluginId: "p", trigger: "t")
+        store.prune()
+        #expect(board.cards(of: "p").map(\.id) == ["open", "new"])
     }
 
     @Test func eachPluginKeepsItsDoneCardsForItsOwnDays() {
-        var clock = Date()
-        let store = BoardStore(dir: dir(), now: { clock })
+        let clock = FakeClock()
+        let store = ActionableStore(dir: dir(), now: clock.function)
         store.retentionDays = { $0 == "mail" ? 1 : 0 }
+        let board = BoardAdapter(store: store)
         for id in ["mail", "jobs"] {
-            store.load(pluginId: id)
-            _ = store.upsert(Card(id: "done", title: "Done", column: .done), pluginId: id)
-            _ = store.upsert(Card(id: "open", title: "Open", column: .needsYou), pluginId: id)
+            board.upsert(Card(id: "done", title: "Done", column: .done), pluginId: id, trigger: "t")
+            board.upsert(Card(id: "open", title: "Open", column: .needsYou), pluginId: id, trigger: "t")
         }
-        clock = clock.addingTimeInterval(25 * 60 * 60)
-        store.prune(pluginId: "mail")
-        store.prune(pluginId: "jobs")
-        #expect(store.cards(of: "mail").map(\.id) == ["open"])
-        #expect(store.cards(of: "jobs").map(\.id) == ["done", "open"])
+        clock.advance(25 * 60 * 60)
+        store.prune()
+        #expect(board.cards(of: "mail").map(\.id) == ["open"])
+        #expect(board.cards(of: "jobs").map(\.id) == ["done", "open"])
     }
 
     @Test func aCardWithMoreThan32KBOfDataIsRefused() throws {
-        let store = BoardStore(dir: dir())
-        store.load(pluginId: "p")
+        let board = BoardAdapter(store: ActionableStore(dir: dir()))
         let big = Card(id: "big", title: "Big", column: .planned, data: .object(["text": .string(String(repeating: "x", count: 33 * 1024))]))
-        guard case .failure(let error) = store.upsert(big, pluginId: "p") else { Issue.record("the upsert passed"); return }
+        guard case .failure(let error) = board.upsert(big, pluginId: "p", trigger: "t") else { Issue.record("the upsert passed"); return }
         #expect(error.description.contains("33803 bytes"))
-        #expect(store.cards(of: "p").isEmpty)
+        #expect(board.cards(of: "p").isEmpty)
     }
 
     @Test func dataSurvivesAReload() throws {
         let folder = dir()
         let data = JSONValue.object(["kind": .string("match"), "monitorId": .number(3), "tags": .array([.bool(true), .null])])
-        let store = BoardStore(dir: folder)
-        store.load(pluginId: "p")
-        _ = store.upsert(Card(id: "a", title: "A", column: .needsYou, data: data), pluginId: "p")
-        let reloaded = BoardStore(dir: folder)
-        reloaded.load(pluginId: "p")
-        #expect(reloaded.card("p", "a")?.data == data)
+        BoardAdapter(store: ActionableStore(dir: folder)).upsert(Card(id: "a", title: "A", column: .needsYou, data: data), pluginId: "p", trigger: "t")
+        #expect(BoardAdapter(store: ActionableStore(dir: folder)).card("p", "a")?.data == data)
     }
 
     @Test func activityLeavesTheDataOut() throws {
@@ -141,28 +170,6 @@ struct BoardStoreTests {
         let json = try #require(Reply.encode(activity))
         #expect(activity.cards.count == 1)
         #expect(!json.contains("only for the UI"))
-    }
-
-    @Test func aStoredCardWithActionsLoadsAndTheNextSaveDropsThem() throws {
-        let folder = dir()
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let old = #"[{"id":"a","title":"A","column":"needs-you","actions":[{"id":"done","label":"Done"}]}]"#
-        try Data(old.utf8).write(to: folder.appendingPathComponent("p.json"))
-        let store = BoardStore(dir: folder)
-        store.load(pluginId: "p")
-        #expect(store.card("p", "a")?.title == "A")
-        _ = store.upsert(Card(id: "b", title: "B", column: .planned), pluginId: "p")
-        #expect(try !String(contentsOf: folder.appendingPathComponent("p.json"), encoding: .utf8).contains("actions"))
-    }
-
-    @Test func aCorruptFileIsNotReplaced() throws {
-        let folder = dir()
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try Data("{not json".utf8).write(to: folder.appendingPathComponent("p.json"))
-        let store = BoardStore(dir: folder)
-        store.load(pluginId: "p")
-        #expect((try? store.upsert(Card(id: "a", title: "A", column: .planned), pluginId: "p").get()) == nil)
-        #expect(try String(contentsOf: folder.appendingPathComponent("p.json"), encoding: .utf8) == "{not json")
     }
 }
 
@@ -240,55 +247,87 @@ struct ToolGuardTests {
     }
 }
 
-/// Constitution R1: the host source names no plugin.
-/// The host must not name a plugin of `ROUTINES_PLUGINS_DIR`.
+/// Constitution R1 and FR-011: the host source names no plugin, no kind and no transition.
+/// The host must not name a plugin of `ROUTINES_PLUGINS_DIR`, or a kind or a transition of their manifests.
 struct HostIsGenericTests {
     static let pluginsDir = ProcessInfo.processInfo.environment["ROUTINES_PLUGINS_DIR"]
+    static let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    static let newFolders = ["Actionables", "Entrance", "Polling", "Memory"]
+
+    private static func sources() -> [URL] {
+        FileManager.default.enumerator(at: app.appendingPathComponent("Sources"), includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
+    }
+
+    @Test func theCheckReadsTheNewFeatureFolders() {
+        let folders = Set(Self.sources().map { $0.deletingLastPathComponent().lastPathComponent })
+        for folder in Self.newFolders { #expect(folders.contains(folder), "the check does not read Kit/\(folder)") }
+    }
 
     @Test(.enabled(if: pluginsDir != nil, "ROUTINES_PLUGINS_DIR is not set"))
-    func theHostSourceNamesNoPluginId() throws {
-        let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let ids = ((try? FileManager.default.contentsOfDirectory(atPath: Self.pluginsDir ?? "")) ?? []).filter { !$0.hasPrefix(".") }
+    func theHostSourceNamesNoPluginKindOrTransition() throws {
+        let dir = Self.pluginsDir ?? ""
+        let ids = ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).filter { !$0.hasPrefix(".") }
         #expect(!ids.isEmpty)
-        let sources = FileManager.default.enumerator(at: app.appendingPathComponent("Sources"), includingPropertiesForKeys: nil)?
-            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
-        for file in sources {
+        let manifests = ids.compactMap { id in
+            (try? Data(contentsOf: URL(fileURLWithPath: dir).appendingPathComponent("\(id)/plugin.json"))).flatMap { try? JSONDecoder().decode(Manifest.self, from: $0) }
+        }
+        let names = Set(ids + manifests.flatMap { $0.kinds + $0.handles.map(\.kind) + $0.transitions.map(\.id) })
+        for file in Self.sources() {
             let text = try String(contentsOf: file, encoding: .utf8)
-            for id in ids {
-                let pattern = "\"\(id)\""
-                #expect(!text.contains(pattern), "\(file.lastPathComponent) names the plugin \(id)")
+            for name in names {
+                #expect(!text.contains("\"\(name)\""), "\(file.lastPathComponent) names \(name) of a plugin")
             }
         }
     }
 }
 
 struct ExternalActionTests {
-    private let manifest = Manifest(
-        id: "mail", name: "Mail", permissions: Permissions(external: ["trash-numbers"]),
-        actions: [
-            CardAction(id: "trash-numbers", label: "Trash by number"), CardAction(id: "reply", label: "Reply"),
-            CardAction(id: "trash", label: "Trash", target: .item),
-        ])
-
     @Test func aURLRoundTrips() {
         let action = ExternalAction(pluginId: "mail", actionId: "trash-numbers", text: "41 43-45", replyFile: "/data/replies/a.txt")
         #expect(ExternalAction.parse(action.url) == action)
+        let transition = ExternalAction(pluginId: "asker", actionId: "answer", item: "9", text: "use the staging key", replyFile: nil)
+        #expect(ExternalAction.parse(transition.url) == transition)
     }
 
-    @Test func onlyListedActionsRunFromOutside() {
-        let allowed = ExternalAction(pluginId: "mail", actionId: "trash-numbers", text: "1", replyFile: "/data/replies/a.txt")
-        let reply = ExternalAction(pluginId: "mail", actionId: "reply", text: "delete all", replyFile: nil)
-        let escape = ExternalAction(pluginId: "mail", actionId: "trash-numbers", text: "1", replyFile: "/data/replies/../../etc/x")
-        #expect((try? allowed.check(manifest, repliesDir: "/data/replies").get()) != nil)
-        #expect((try? reply.check(manifest, repliesDir: "/data/replies").get()) == nil)
-        #expect((try? escape.check(manifest, repliesDir: "/data/replies").get()) == nil)
+    @Test func anAnswerGoesOnlyToTheRepliesFolder() {
+        let inside = ExternalAction(pluginId: "mail", actionId: "a", text: nil, replyFile: "/data/replies/a.txt")
+        let escape = ExternalAction(pluginId: "mail", actionId: "a", text: nil, replyFile: "/data/replies/../../etc/x")
+        #expect((try? inside.checkReply(repliesDir: "/data/replies").get()) != nil)
+        #expect((try? escape.checkReply(repliesDir: "/data/replies").get()) == nil)
     }
 
-    @Test func anItemActionNeverRunsFromOutside() {
-        var listed = manifest
-        listed.permissions.external.append("trash")
-        let request = ExternalAction(pluginId: "mail", actionId: "trash", text: nil, replyFile: nil)
-        #expect(throws: HostError.denied("trash needs an item")) { try request.check(listed, repliesDir: "/data/replies").get() }
+    @Test func anItemMakesATransitionTriggerFromOutside() {
+        let at = Date()
+        let trigger = ExternalAction(pluginId: "asker", actionId: "answer", item: "9", text: "yes", replyFile: nil).trigger(at: at)
+        #expect(trigger.source == .external && trigger.work == .transition && trigger.actionable == "9" && trigger.transition == "answer")
+        #expect(ExternalAction(pluginId: "mail", actionId: "go", text: nil, replyFile: nil).trigger(at: at).work == .action)
+    }
+
+    @MainActor
+    @Test func aScriptMovesOnlyWhatTheManifestAllows() async throws {
+        let host = PluginHost.actionables()
+        let bug = host.seed(kind: "bug", owner: "asker", state: .waitingOnYou, data: .object(["repo": .string("r"), "details": .string("d")]))
+        let working = host.seed(kind: "bug", owner: "asker", state: .working)
+        let note = host.seed(kind: "note", owner: "sender", state: .ready)
+        let external = { (action: String, item: String, text: String?) in
+            await host.answer(of: ExternalAction(pluginId: "asker", actionId: action, item: item, text: text, replyFile: nil).trigger(at: host.now()))
+        }
+        #expect(await external("merge", working.id, nil) == .failure(.failed("asker does not allow merge from outside the app")))
+        #expect(await external("approve", bug.id, nil) == .failure(.failed("Approve starts only from a press in the app")))
+        #expect(await external("drop", note.id, nil) == .failure(.failed("asker does not own actionable \(note.id)")))
+        #expect(try await external("answer", bug.id, "use the staging key").get() == "use the staging key")
+        #expect(host.actionables.actionable(bug.id)?.state == .working)
+    }
+
+    @MainActor
+    @Test func theReplyFileHoldsTheStatusOrTheRefusal() async throws {
+        let host = PluginHost.actionables()
+        let bug = host.seed(kind: "bug", owner: "asker", state: .working, data: .object(["repo": .string("r"), "details": .string("d")]))
+        let reply = host.paths.file("replies/a.txt").path
+        host.performExternal(ExternalAction(pluginId: "asker", actionId: "merge", item: bug.id, text: nil, replyFile: reply))
+        await waitUntil { FileManager.default.fileExists(atPath: reply) }
+        #expect(try String(contentsOfFile: reply, encoding: .utf8) == "Error: asker does not allow merge from outside the app")
     }
 }
 
@@ -316,6 +355,23 @@ struct ManifestTests {
         let decode = { (json: String) in try JSONDecoder().decode(Manifest.self, from: Data(json.utf8)) }
         #expect(try decode(#"{"id":"a","name":"A"}"#).hidden == false)
         #expect(try decode(#"{"id":"a","name":"A","hidden":true}"#).hidden == true)
+    }
+
+    @Test func theNewFieldsDecodeAndNameTheRole() throws {
+        let decode = { (json: String) in try JSONDecoder().decode(Manifest.self, from: Data(json.utf8)) }
+        let routine = try decode(#"{"id":"a","name":"A","handles":[{"kind":"bug","states":["new"]}],"kinds":["bug"],"transitions":[{"id":"go","label":"Go","from":["new"],"risk":"outward","confirm":true}]}"#)
+        #expect(routine.role == .routine)
+        #expect(routine.transitions.first?.risk == .outward && routine.transitions.first?.needsConfirmation == true)
+        #expect(try decode(#"{"id":"s","name":"S","source":{"kinds":["note"],"tools":["mcp__x__read"]}}"#).role == .source)
+        #expect(try decode(#"{"id":"o","name":"O"}"#).role == .legacy)
+        #expect(throws: DecodingError.self) { try decode(#"{"id":"a","name":"A","transitions":[{"id":"go","label":"Go","from":["new"]}]}"#) }
+    }
+
+    @Test func theItemActionsOfAPluginOfTodayAreOutwardTransitions() {
+        let manifest = Manifest(id: "old", name: "Old", actions: [CardAction(id: "done", label: "Done", target: .item), CardAction(id: "go", label: "Go")])
+        #expect(manifest.effectiveTransitions.map(\.id) == ["done"])
+        #expect(manifest.transition("done")?.risk == .outward)
+        #expect(manifest.transition("done")?.from == Actionable.State.open)
     }
 
     @Test func doneCardsDefaultToTwoWeeks() throws {

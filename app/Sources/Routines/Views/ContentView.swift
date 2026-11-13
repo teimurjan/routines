@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    @State private var size = CGSize.zero
 
     var body: some View {
         NavigationSplitView {
@@ -11,15 +12,17 @@ struct ContentView: View {
         } detail: {
             Group {
                 switch model.selection {
-                case .inbox, nil: InboxView()
-                case .threads: ThreadsView()
-                case .runs: RunsView(pluginId: nil)
+                case .runs, nil: RunsView(pluginId: nil)
+                case .memory: MemoryView()
                 case .plugin(let id):
                     if let plugin = model.host.plugin(id) { PluginView(plugin: plugin) } else { ContentUnavailableView("No plugin", systemImage: "puzzlepiece") }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Theme.canvas)
+            // The panel stays in the content area, so the large panel ends at the sidebar.
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+            .overlay(alignment: .bottomTrailing) { ThreadsOverlay(room: size) }
         }
     }
 }

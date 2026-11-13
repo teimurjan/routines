@@ -24,7 +24,7 @@ You do not need to write code to make a routine. Describe it in a thread, and th
 - **It runs on your Mac.** Your files, your logins and your agents stay on your machine. A run uses your own Claude Code or Codex.
 - **A plugin gets only what it declares.** Each plugin lists the commands, HTTP hosts and paths that it can reach. The host refuses everything else.
 - **Agents decide, and code acts.** An agent returns typed JSON. Plugin code checks it before anything happens. An action that needs you waits for your click.
-- **One Inbox.** Every item that needs you, from every routine, is in one list with a count in the sidebar.
+- **One thread per routine.** When a routine needs you, it asks in its own thread in the thread panel, and the sidebar shows the count of open questions.
 - **A UI for each routine.** A plugin ships its own page, built with shared Preact controls that match the app.
 - **The app starts empty.** You add only the routines that you want.
 
@@ -55,7 +55,7 @@ The app opens with no routines. Make your first one in the next section.
 
 ### Ask the agent
 
-1. Open **Threads** and press **New thread**.
+1. Press the round button at the bottom right of the window, or press ⌘J. The thread panel opens.
 2. Describe the routine, for example:
 
    > Make a routine that checks https://example.com every hour. If the site is down, tell me.
@@ -63,7 +63,9 @@ The app opens with no routines. Make your first one in the next section.
 3. The agent writes the plugin, runs its tests and builds it. The routine shows in the sidebar.
 4. Open the routine, fill its settings in the **Settings** tab and turn it on.
 
-To change a routine later, ask in the same thread or in a new one. To choose Claude Code or Codex, a model and an effort, press the agent button at the top right of Threads.
+To change a routine later, ask in the same thread or in a new one. To choose Claude Code or Codex, a model and an effort, press the agent button under the message field.
+
+To ask about one item of a routine, Command-click or Control-click the item. If the panel is closed, a new thread opens with the item attached. If the panel is open, the item goes on your next message.
 
 ### Write it yourself
 
@@ -121,7 +123,7 @@ plugin.json + dist/plugin.js       the manifest and the bundle of a routine
 dist/ui                            the page of the routine, in a locked-down web view
 ```
 
-Each routine shows its items in its own UI, the first tab of its page. An item has a state: Planned, In progress, Needs you, Done or Failed. A click on an Inbox row or on a notification opens the routine at that item.
+Each routine shows its items in its own UI, the first tab of its page. An item has a state of one shared lifecycle, for example `ready`, `working`, `waiting-on-you` or `done`. A click on a notification of a question opens that question in the thread of its routine.
 
 Each routine also has a **Settings** tab with its settings, notes, permissions and an on/off switch. Your notes go into the input of its agents. The **Runs** view lists each run and each action with its log.
 
@@ -145,7 +147,7 @@ To keep your plugins in a repo of your own, clone it next to this repo. Add `../
 
 | Task | How |
 | --- | --- |
-| See what needs you | Open **Inbox**. The sidebar shows the count. |
+| See what needs you | Open the thread panel. The Routines group shows the open questions of each routine. |
 | Teach a routine | Add a note in its **Settings** tab. |
 | Turn a routine off | Use the switch in its **Settings** tab. |
 | Delete finished items | Choose a time in "Delete done and failed cards" in the **Settings** tab. |

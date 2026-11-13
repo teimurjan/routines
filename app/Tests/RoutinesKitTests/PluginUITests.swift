@@ -90,8 +90,8 @@ struct PluginUIBridgeTests {
     private func host() -> PluginHost {
         let host = PluginHost(paths: Fixture.uiPaths())
         host.reload()
-        _ = host.board.upsert(Card(id: "c1", title: "First item", column: .needsYou), pluginId: "ui-plugin")
-        _ = host.board.upsert(Card(id: "e1", title: "Echo item", column: .needsYou), pluginId: "echo")
+        host.boardAdapter.upsert(Card(id: "c1", title: "First item", column: .needsYou), pluginId: "ui-plugin", trigger: "test")
+        host.boardAdapter.upsert(Card(id: "e1", title: "Echo item", column: .needsYou), pluginId: "echo", trigger: "test")
         return host
     }
 
@@ -100,7 +100,7 @@ struct PluginUIBridgeTests {
         let manifest = host.plugin("ui-plugin")!.manifest
         let appearance = PluginUISnapshot.Appearance(scheme: .dark, accent: "#FF0000")
         return bridge.decide(
-            Data(json.utf8), manifest: manifest, card: { host.board.card("ui-plugin", $0) },
+            Data(json.utf8), manifest: manifest, card: { host.boardAdapter.card("ui-plugin", $0) },
             snapshot: { host.uiSnapshot(pluginId: "ui-plugin", appearance: appearance)!.json })
     }
 
@@ -166,5 +166,58 @@ struct PluginUIBridgeTests {
     @Test func anUnknownTypeOrABadMessageIsRefused() {
         #expect(decide(#"{"type":"exec","cmd":["rm"]}"#) == .refuse("unknown message type exec"))
         #expect(decide(#""snapshot""#) == .refuse("the message must be an object with a type"))
+    }
+}
+
+/// FR-012: the snapshot holds only the actionables that the routine owns, and the ones that it owned before, read-only.
+@MainActor
+struct SnapshotTests {
+    private let appearance = PluginUISnapshot.Appearance(scheme: .light, accent: "#000000")
+
+    @Test func theSnapshotHoldsOwnedAndPastActionablesOnly() throws {
+        let host = PluginHost.actionables()
+        let owned = host.seed(kind: "bug", owner: "asker", state: .waitingOnYou)
+        let other = host.seed(kind: "note", owner: "sender", state: .ready)
+        let handed = host.seed(kind: "bug", owner: "asker", state: .working, data: .object(["repo": .string("r"), "details": .string("d")]))
+        try host.actionables.update(handed.id, step: Step.Draft(action: .handoff, actor: "asker", trigger: "t")) { moved in
+            moved.pastOwners = ["asker"]
+            moved.owner = "sender"
+            moved.state = .ready
+        }.get()
+
+        let snapshot = try #require(host.uiSnapshot(pluginId: "asker", appearance: appearance))
+        #expect(snapshot.actionables.map(\.actionable.id) == [owned.id, handed.id])
+        #expect(snapshot.actionables.map(\.readOnly) == [false, true])
+        #expect(snapshot.actionables.first?.allowed == ["answer", "approve", "drop"])
+        #expect(snapshot.actionables.last?.allowed == [])
+        #expect(snapshot.items.map(\.id) == [owned.id])
+        #expect(snapshot.items.first?.column == .needsYou)
+        #expect(snapshot.transitions.map(\.id) == ["ask", "answer", "merge", "approve", "drop"])
+        #expect(!snapshot.json.contains("\"id\":\"\(other.id)\""))
+        #expect(snapshot.json.contains(#""readOnly":true"#))
+        #expect(snapshot.json.contains(#""owner":"sender""#))
+    }
+
+    @Test func aTransitionMessageAsksFirstOnlyWithConfirm() throws {
+        let host = PluginHost.actionables()
+        let bug = host.seed(kind: "bug", owner: "asker", state: .waitingOnYou)
+        let manifest = try #require(host.plugin("asker")).manifest
+        let decide = { (body: String) in
+            PluginUIBridge(pluginId: "asker").decide(
+                Data(body.utf8), manifest: manifest, card: { _ in nil }, actionable: { host.actionables.actionable($0) }, snapshot: { "null" })
+        }
+        guard case .confirm(let request, let title) = decide(#"{"type":"transition","actionable":"\#(bug.id)","transition":"approve"}"#) else {
+            Issue.record("approve did not ask first")
+            return
+        }
+        #expect(request.actionableId == bug.id && request.action.label == "Approve" && title == bug.title)
+        #expect(decide(#"{"type":"transition","actionable":"\#(bug.id)","transition":"answer"}"#) == .refuse("the transition Answer needs text"))
+        guard case .perform(let drop) = decide(#"{"type":"transition","actionable":"\#(bug.id)","transition":"drop"}"#) else {
+            Issue.record("drop did not perform")
+            return
+        }
+        #expect(drop.actionableId == bug.id)
+        let other = host.seed(kind: "note", owner: "sender", state: .ready)
+        #expect(decide(#"{"type":"transition","actionable":"\#(other.id)","transition":"drop"}"#) == .refuse("there is no actionable \(other.id)"))
     }
 }

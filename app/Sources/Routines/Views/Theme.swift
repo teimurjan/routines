@@ -18,6 +18,7 @@ enum Theme {
     static let success = Tokens.Color.success
     static let warning = Tokens.Color.warning
     static let onAccent = Tokens.Color.onAccent
+    static let glassDim = Tokens.Color.glassDim
     static let radius = Tokens.Radius.card
 }
 

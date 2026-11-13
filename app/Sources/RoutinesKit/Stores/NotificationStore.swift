@@ -7,6 +7,8 @@ public struct HostNotification: Codable, Equatable, Sendable, Identifiable {
     public var title: String
     public var body: String
     public var cardId: String?
+    /// The question step that the notification opens.
+    public var stepId: String?
     public var at: Date
 }
 
@@ -24,8 +26,8 @@ public final class NotificationStore {
     }
 
     @discardableResult
-    public func add(pluginId: String, title: String, body: String, cardId: String?) -> HostNotification {
-        let item = HostNotification(id: UUID(), pluginId: pluginId, title: title, body: body, cardId: cardId, at: Date())
+    public func add(pluginId: String, title: String, body: String, cardId: String?, stepId: String? = nil) -> HostNotification {
+        let item = HostNotification(id: UUID(), pluginId: pluginId, title: title, body: body, cardId: cardId, stepId: stepId, at: Date())
         items = Array(([item] + items).prefix(Self.limit))
         file.save(items)
         return item

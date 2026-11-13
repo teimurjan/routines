@@ -14,3 +14,4 @@ export * from "./ProgressRing.tsx";
 export * from "./SearchField.tsx";
 export * from "./Status.tsx";
 export * from "./TabStrip.tsx";
+export * from "./TransitionButton.tsx";

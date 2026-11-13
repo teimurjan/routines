@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { actionOf, bridge, connect, imageUrl, type Snapshot } from "./bridge.ts";
+import { actionableOf, actionOf, bridge, connect, imageUrl, transitionOf, type Snapshot } from "./bridge.ts";
 
 type Sent = { type: string; [field: string]: unknown };
 
@@ -11,6 +11,8 @@ const snapshot = (title: string): Snapshot => ({
   pending: { items: [], plugin: false },
   status: null,
   appearance: { scheme: "light", accent: "#007AFF" },
+  actionables: [],
+  transitions: [],
 });
 
 let sent: Sent[] = [];
@@ -80,4 +82,31 @@ test("actionOf finds a manifest action by its id", () => {
   expect(actionOf(value, "done")?.label).toBe("Done");
   expect(actionOf(value, "delete-all")).toBeUndefined();
   expect(actionOf(undefined, "done")).toBeUndefined();
+});
+
+test("a transition press sends the actionable, the transition and the text", async () => {
+  answer = () => ({ ok: true, value: "Answered." });
+  expect(await bridge.transition("9", "answer", "use the staging key")).toEqual({ ok: true, value: "Answered." });
+  expect(await bridge.transition("9", "start")).toEqual({ ok: true, value: "Answered." });
+  expect(sent).toEqual([
+    { type: "transition", actionable: "9", transition: "answer", text: "use the staging key" },
+    { type: "transition", actionable: "9", transition: "start" },
+  ]);
+});
+
+test("a cancelled transition is an error, not an exception", async () => {
+  answer = () => ({ ok: false, error: "Cancelled." });
+  expect(await bridge.transition("9", "approve")).toEqual({ ok: false, error: "Cancelled." });
+});
+
+test("transitionOf and actionableOf find their entries by id", () => {
+  const actionable = {
+    id: "9", kind: "bug", source: "triage", dedupeKey: "k", owner: "factory", pastOwners: [], state: "ready" as const, title: "Bug",
+    links: [], data: {}, steps: [], createdAt: "2026-11-13T10:00:00.000Z", updatedAt: "2026-11-13T10:00:00.000Z", readOnly: false, allowed: ["start"],
+  };
+  const value = { ...snapshot("First"), actionables: [actionable], transitions: [{ id: "start", label: "Start", from: ["ready" as const], risk: "reversible" as const }] };
+  expect(transitionOf(value, "start")?.label).toBe("Start");
+  expect(transitionOf(value, "merge")).toBeUndefined();
+  expect(actionableOf(value, "9")?.allowed).toEqual(["start"]);
+  expect(actionableOf(undefined, "9")).toBeUndefined();
 });

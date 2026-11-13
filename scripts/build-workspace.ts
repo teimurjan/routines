@@ -18,6 +18,10 @@ const DOCS = [
   "specs/002-plugin-ui/contracts/tokens.md",
   "specs/003-custom-ui-everywhere/contracts/actions.md",
   "specs/003-custom-ui-everywhere/contracts/ui-controls.md",
+  "specs/004-actionables/contracts/actionables.md",
+  "specs/004-actionables/contracts/entrance.md",
+  "specs/004-actionables/contracts/sources.md",
+  "specs/004-actionables/contracts/memory.md",
   "DESIGN.md",
 ];
 

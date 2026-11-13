@@ -40,13 +40,15 @@ public final class ThreadService {
         store.create(provider: config.provider)
     }
 
-    public func send(_ message: String, threadId: String) {
+    /// Sends your message with the routine items that it asks about.
+    public func send(_ message: String, references: [ItemReference] = [], threadId: String) {
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isRunning(threadId), let thread = store.thread(threadId) else { return }
-        store.update(threadId) { $0.items.append(ThreadItem(kind: .user, text: text)) }
+        store.update(threadId) { $0.items.append(ThreadItem(kind: .user, text: text, references: references.isEmpty ? nil : references)) }
 
         let paths = host.paths
-        let prompt = ThreadContext.prompt(text, workspace: paths.workspaceDir, dataDir: paths.dataDir, routines: host.routineSummaries())
+        let prompt = ThreadContext.prompt(
+            text, workspace: paths.workspaceDir, dataDir: paths.dataDir, routines: host.routineSummaries(), items: references.map(host.itemContext))
         let command = command(for: thread)
         let provider = thread.provider
         let process = AgentProcess()

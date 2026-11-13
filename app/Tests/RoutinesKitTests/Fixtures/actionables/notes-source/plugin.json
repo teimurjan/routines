@@ -1,0 +1,7 @@
+{
+  "id": "notes-source",
+  "name": "Notes source",
+  "description": "A test source that reads notes.",
+  "timeoutMinutes": 1,
+  "source": { "kinds": ["note"], "tools": ["mcp__fake__read"] }
+}

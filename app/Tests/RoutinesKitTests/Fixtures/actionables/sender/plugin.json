@@ -1,0 +1,12 @@
+{
+  "id": "sender",
+  "name": "Sender",
+  "description": "A test routine that hands its notes on as bugs.",
+  "timeoutMinutes": 1,
+  "handles": [{ "kind": "note", "states": ["new", "ready"] }],
+  "kinds": ["note"],
+  "transitions": [
+    { "id": "start", "label": "Start", "from": ["new", "ready"], "risk": "reversible" },
+    { "id": "send", "label": "Send", "from": ["working"], "risk": "outward" }
+  ]
+}

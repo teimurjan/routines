@@ -13,6 +13,7 @@ public final class PluginWebView: NSObject {
     // Each load outside the scheme is blocked, including loads that the content policy does not name.
     private static let rules = #"[{"trigger":{"url-filter":".*"},"action":{"type":"block"}},{"trigger":{"url-filter":"^routines-ui://"},"action":{"type":"ignore-previous-rules"}}]"#
     private static var ruleList: WKContentRuleList?
+    private static let hostWorld = WKContentWorld.world(name: "routines-host")
 
     public let webView: WKWebView
     public let pluginId: String
@@ -22,6 +23,8 @@ public final class PluginWebView: NSObject {
     private var navigated = false
     /// The page did not load, with the reason.
     public var onLoadError: @MainActor (String) -> Void = { _ in }
+    /// You Command-clicked the item with this id. The id is one that `setCardIds` gave.
+    public var onAsk: @MainActor (String) -> Void = { _ in }
 
     public init(plugin: PluginEntry, background: NSColor, listedImages: @escaping @MainActor () -> Set<String>, respond: @escaping Respond) {
         pluginId = plugin.id
@@ -37,7 +40,10 @@ public final class PluginWebView: NSObject {
         webView.underPageBackgroundColor = background
         webView.allowsLinkPreview = false
         super.init()
-        configuration.userContentController.addScriptMessageHandler(WeakHandler(self), contentWorld: .page, name: Self.messageHandler)
+        let controller = configuration.userContentController
+        controller.addScriptMessageHandler(WeakHandler(self), contentWorld: .page, name: Self.messageHandler)
+        controller.addUserScript(WKUserScript(source: AskScript.source, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: Self.hostWorld))
+        controller.add(WeakAskHandler(self), contentWorld: Self.hostWorld, name: AskScript.handler)
         webView.navigationDelegate = self
         webView.uiDelegate = self
     }
@@ -66,6 +72,11 @@ public final class PluginWebView: NSObject {
             contentWorld: .page)
     }
 
+    /// The items that a Command-click can ask about. Only the host world sees them.
+    public func setCardIds(_ ids: [String]) async {
+        _ = try? await webView.callAsyncJavaScript("window.routinesCards = new Set(ids)", arguments: ["ids": ids], in: nil, contentWorld: Self.hostWorld)
+    }
+
     private static func compiledRuleList() async -> Result<WKContentRuleList, HostError> {
         if let ruleList { return .success(ruleList) }
         guard let store = WKContentRuleListStore.default() else { return .failure(.failed("no content rule store")) }
@@ -89,6 +100,14 @@ public final class PluginWebView: NSObject {
             return Self.envelope(.failure(.failed("the message is not JSON")))
         }
         return Self.envelope(await respond(body))
+    }
+
+    fileprivate func ask(_ message: WKScriptMessage) {
+        let origin = message.frameInfo.securityOrigin
+        guard message.frameInfo.isMainFrame, origin.protocol == PluginUIResources.scheme, origin.host == pluginId,
+            let cardId = (message.body as? [String: Any])?["cardId"] as? String
+        else { return }
+        onAsk(cardId)
     }
 
     /// The promise of the page resolves with `{ ok: true, value }` or `{ ok: false, error }`.
@@ -143,5 +162,18 @@ private final class WeakHandler: NSObject, WKScriptMessageHandlerWithReply {
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) async -> (Any?, String?) {
         guard let target else { return (nil, "the plugin UI closed") }
         return (await target.receive(message), nil)
+    }
+}
+
+@MainActor
+private final class WeakAskHandler: NSObject, WKScriptMessageHandler {
+    weak var target: PluginWebView?
+
+    init(_ target: PluginWebView) {
+        self.target = target
+    }
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        target?.ask(message)
     }
 }

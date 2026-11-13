@@ -62,6 +62,13 @@ const routines: RoutinesHost = {
     remove: (id) => call("board.remove", { id }),
     list: () => call("board.list"),
   },
+  actionables: {
+    list: (options = {}) => call("actionables.list", options),
+    get: (id) => call("actionables.get", { id }),
+    move: (id, move) => call("actionables.move", { ...move, id }),
+    request: (id, transition, text) => call("actionables.request", text === undefined ? { id, transition } : { id, transition, text }),
+    handoff: (id, change) => call("actionables.handoff", { ...change, id }),
+  },
   notify: (notification) => call("notify", notification),
   runSoon: (delayMs) => call("run.soon", { delayMs }),
   notes: { list: () => call("notes.list") },
