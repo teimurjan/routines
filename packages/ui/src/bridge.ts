@@ -1,5 +1,8 @@
 // A typed client of the plugin UI bridge. See specs/002-plugin-ui/contracts/plugin-ui.md.
-import type { CardAction, Page, Result, StoredCard } from "@routines/sdk";
+import type { CardAction, Page, Result, StoredActionable, StoredCard, TransitionDeclaration } from "@routines/sdk";
+
+// `allowed` lists the transitions that start from the current state.
+export type SnapshotActionable = StoredActionable & { allowed: string[] };
 
 export type Snapshot = {
   plugin: { id: string; name: string; emoji?: string; color: string };
@@ -10,6 +13,9 @@ export type Snapshot = {
   pending: { items: string[]; plugin: boolean };
   status: string | null;
   appearance: { scheme: "light" | "dark"; accent: string };
+  // The actionables that the routine owns, and those that it owned before with `readOnly: true`.
+  actionables: SnapshotActionable[];
+  transitions: TransitionDeclaration[];
 };
 
 export type HostEvent = { type: "snapshot"; value: Snapshot } | { type: "focus"; value: { cardId: string } };
@@ -19,6 +25,7 @@ type Message =
   | { type: "snapshot" }
   | { type: "perform"; cardId: string; actionId: string; text?: string }
   | { type: "performPluginAction"; actionId: string; text?: string }
+  | { type: "transition"; actionable: string; transition: string; text?: string }
   | { type: "openLink"; url: string };
 
 type Handler = { postMessage: (message: Message) => Promise<unknown> };
@@ -52,6 +59,8 @@ export const bridge = {
   snapshot: () => send<Snapshot>({ type: "snapshot" }),
   perform: (cardId: string, actionId: string, text?: string) => send<string | null>({ type: "perform", cardId, actionId, ...withText(text) }),
   performPluginAction: (actionId: string, text?: string) => send<string | null>({ type: "performPluginAction", actionId, ...withText(text) }),
+  // A transition with `confirm: true` resolves after the host dialog, as an action does.
+  transition: (actionable: string, transition: string, text?: string) => send<string | null>({ type: "transition", actionable, transition, ...withText(text) }),
   openLink: (url: string) => send<null>({ type: "openLink", url }),
 };
 
@@ -84,6 +93,12 @@ export const connect = (onSnapshot: (snapshot: Snapshot) => void, onError: (erro
 
 // The manifest action with this id, or undefined.
 export const actionOf = (snapshot: Snapshot | undefined, actionId: string) => snapshot?.actions.find(({ id }) => id === actionId);
+
+// The transition declaration with this id, or undefined.
+export const transitionOf = (snapshot: Snapshot | undefined, transitionId: string) => snapshot?.transitions.find(({ id }) => id === transitionId);
+
+// The actionable with this id, or undefined.
+export const actionableOf = (snapshot: Snapshot | undefined, id: string) => snapshot?.actionables.find((actionable) => actionable.id === id);
 
 // The URL of an image path that a card of the plugin lists in `images`.
 export const imageUrl = (path: string) => `/_image/${encodeURIComponent(path)}`;

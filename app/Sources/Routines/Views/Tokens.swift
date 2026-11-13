@@ -21,6 +21,7 @@ enum Tokens {
         static let success = SwiftUI.Color(light: 0x1F9D55FF, dark: 0x3DD68CFF)
         static let warning = SwiftUI.Color(light: 0xF59E0BFF, dark: 0xFBBF24FF)
         static let onAccent = SwiftUI.Color(light: 0xFFFFFFFF, dark: 0xFFFFFFFF)
+        static let glassDim = SwiftUI.Color(light: 0x0000001A, dark: 0x00000040)
     }
     enum Opacity {
         static let tint: Double = 0.1
@@ -66,6 +67,11 @@ enum Tokens {
         static let pageGutter: CGFloat = 28
         static let pageTop: CGFloat = 18
         static let tabMinWidth: CGFloat = 76
+        static let floatInset: CGFloat = 20
+        static let floatButton: CGFloat = 48
+        static let threadPanelWidth: CGFloat = 440
+        static let threadListWidth: CGFloat = 230
+        static let threadPanelHeight: CGFloat = 660
     }
     enum Padding {
         static let pill = Inset(x: 7, y: 3.5)
@@ -74,6 +80,8 @@ enum Tokens {
         static let tab = Inset(x: 0, y: 6)
     }
     enum Radius {
+        static let popover: CGFloat = 24
+        static let bubble: CGFloat = 16
         static let card: CGFloat = 14
         static let sheet: CGFloat = 18
         static let panel: CGFloat = 12
@@ -84,5 +92,6 @@ enum Tokens {
     enum Shadow {
         static let card = ShadowStyle(opacity: 0.04, radius: 2, y: 1)
         static let segment = ShadowStyle(opacity: 0.08, radius: 1.5, y: 1)
+        static let float = ShadowStyle(opacity: 0.18, radius: 24, y: 10)
     }
 }

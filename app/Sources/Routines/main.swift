@@ -9,7 +9,18 @@ if CommandLine.arguments.contains(ToolGuard.flag) {
     exit(verdict.code)
 }
 
-// `Routines --perform <plugin> <action> [text]` asks the running app for a menu action and prints its answer.
+// `Routines --memory-mcp --routine <id>` is the read-only memory search server of an agent node.
+if let index = CommandLine.arguments.firstIndex(of: MemoryServer.flag) {
+    let rest = CommandLine.arguments[(index + 1)...]
+    guard let flag = rest.firstIndex(of: "--routine"), flag + 1 < CommandLine.arguments.count else {
+        FileHandle.standardError.write(Data("usage: Routines --memory-mcp --routine <id>\n".utf8))
+        exit(64)
+    }
+    MemoryServer.serve(routine: CommandLine.arguments[flag + 1], entries: HostPaths.standard().file("memory/entries.json"))
+    exit(0)
+}
+
+// `Routines --perform <routine> <transition-or-action> [--item <id>] [text]` asks the running app and prints its answer.
 if let index = CommandLine.arguments.firstIndex(of: ExternalAction.flag) {
     exit(PerformClient.run(Array(CommandLine.arguments[(index + 1)...])))
 }

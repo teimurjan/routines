@@ -41,6 +41,7 @@ Each color has a light value and a dark value. The app picks the value of the cu
 | `success` | `#1F9D55` | `#3DD68C` | Done and good progress. |
 | `warning` | `#F59E0B` | `#FBBF24` | In progress, medium progress and banners. |
 | `on-accent` | `#FFFFFF` | `#FFFFFF` | Text on a primary button. |
+| `glass-dim` | `#0000001A` | `#00000040` | The shade under the glass of the thread panel. |
 
 The accent color is the accent color of the Mac, so it is not a token. The app uses `Color.accentColor`. A page gets it as `--accent`. When you change it in System Settings, the host sends the new value.
 
@@ -88,6 +89,10 @@ All values are points in Swift and pixels in CSS.
 | `size-page-gutter` | 28 | Left and right padding of a page. |
 | `size-page-top` | 18 | Top padding of a page header and of the tab row. |
 | `size-tab-min-width` | 76 | The smallest width of a tab. |
+| `size-float-inset` | 20 | The space between the thread button or panel and the window edge. |
+| `size-float-button` | 48 | The round thread button. |
+| `size-thread-panel-width`, `size-thread-panel-height` | 440, 660 | The small thread panel. The large panel fills the content area beside the sidebar. |
+| `size-thread-list-width` | 230 | The list of threads at the left of the large panel. |
 | `padding-pill` | 7 by 3.5 | Pill. |
 | `padding-button` | 9 by 4.5 | Button. |
 | `padding-field` | 10 by 7 | Search field. |
@@ -97,6 +102,8 @@ All values are points in Swift and pixels in CSS.
 
 | Token | Value | Use |
 | --- | --- | --- |
+| `radius-popover` | 24 | The thread panel. |
+| `radius-bubble` | 16 | Your message and the message field of a thread. |
 | `radius-card` | 14 | Card and status block. |
 | `radius-sheet` | 18 | Board column. |
 | `radius-panel` | 12 | Log view. |
@@ -105,6 +112,7 @@ All values are points in Swift and pixels in CSS.
 | `radius-control` | 7 | Button, pill and selected tab. |
 | `shadow-card` | black at 0.04, blur 2, y 1 | Card. |
 | `shadow-segment` | black at 0.08, blur 1.5, y 1 | Selected tab. |
+| `shadow-float` | black at 0.18, blur 24, y 10 | The thread panel and button before macOS 26, which has no Liquid Glass. |
 
 SwiftUI and CSS draw a shadow blur in different ways. If the two look different, change the shadow token, not one output.
 

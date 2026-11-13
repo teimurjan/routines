@@ -17,6 +17,14 @@ struct RoutinesApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(after: .newItem) {
+                Button("New Thread") {
+                    model.newThread()
+                    model.showThreads(true)
+                }
+                .keyboardShortcut("n")
+                Button(model.threadsOpen ? "Hide Threads" : "Show Threads") { model.showThreads(!model.threadsOpen) }
+                    .keyboardShortcut("j")
+                Divider()
                 Button("Reload Plugins") { model.host.reload() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
             }
@@ -25,7 +33,7 @@ struct RoutinesApp: App {
         MenuBarExtra {
             MenuBarMenu().environment(model)
         } label: {
-            Image(systemName: model.needsYouCount > 0 ? "square.grid.2x2.fill" : "square.grid.2x2")
+            Image(systemName: model.openQuestions > 0 ? "square.grid.2x2.fill" : "square.grid.2x2")
         }
     }
 }
@@ -35,7 +43,7 @@ private struct MenuBarMenu: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Text(model.needsYouCount == 1 ? "1 card needs you" : "\(model.needsYouCount) cards need you")
+        Text(model.openQuestions == 1 ? "1 question waits for you" : "\(model.openQuestions) questions wait for you")
         Button("Open Routines") {
             openWindow(id: "main")
             NSApp.activate()

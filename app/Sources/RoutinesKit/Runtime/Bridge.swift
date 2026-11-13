@@ -5,14 +5,17 @@ public final class Bridge: Sendable {
     public let pluginId: String
     /// Owns the locks and browser sessions of this call, so the host frees them when the call ends.
     public let callId: String
+    /// The id of the decision that started the call.
+    public let trigger: String
     let check: PermissionCheck
     let info: [String: String]
     let log: RunLog
     let services: HostServices
 
-    init(pluginId: String, callId: String, check: PermissionCheck, info: [String: String], log: RunLog, services: HostServices) {
+    init(pluginId: String, callId: String, trigger: String = "", check: PermissionCheck, info: [String: String], log: RunLog, services: HostServices) {
         self.pluginId = pluginId
         self.callId = callId
+        self.trigger = trigger
         self.check = check
         self.info = info
         self.log = log
@@ -37,20 +40,23 @@ public final class Bridge: Sendable {
         case "fs.readText": return path(payload) { path in FileService.readText(path).map { Reply.json($0) } }
         case "fs.readBase64": return path(payload) { path in FileService.readBase64(path).map { Reply.json($0) } }
         case "fs.writeText": return decode(WriteText.self, payload).flatMap { request in
-            check.path(request.path).flatMap { FileService.write(Data(request.text.utf8), to: $0, mode: request.mode) }.map { "null" }
+            check.writablePath(request.path).flatMap { FileService.write(Data(request.text.utf8), to: $0, mode: request.mode) }.map { "null" }
         }
         case "fs.writeBase64": return decode(WriteBase64.self, payload).flatMap { request in
             guard let data = Data(base64Encoded: request.base64) else { return .failure(.failed("invalid base64")) }
-            return check.path(request.path).flatMap { FileService.write(data, to: $0) }.map { "null" }
+            return check.writablePath(request.path).flatMap { FileService.write(data, to: $0) }.map { "null" }
         }
-        case "fs.remove": return path(payload) { FileService.remove($0).map { "null" } }
-        case "fs.mkdir": return path(payload) { FileService.mkdir($0).map { "null" } }
+        case "fs.remove": return decode(PathRequest.self, payload).flatMap { check.writablePath($0.path, removing: true) }.flatMap { FileService.remove($0).map { "null" } }
+        case "fs.mkdir": return decode(PathRequest.self, payload).flatMap { check.writablePath($0.path) }.flatMap { FileService.mkdir($0).map { "null" } }
         case "fs.list": return path(payload) { path in FileService.list(path).map { Reply.encode($0) ?? "[]" } }
         case "lock.acquire": return await lockAcquire(payload)
         case "lock.release": return await lockRelease(payload)
-        case "board.upsert": return await boardUpsert(payload)
-        case "board.remove": return await boardRemove(payload)
-        case "board.list": return await boardList()
+        case "board.upsert", "board.remove", "board.list", "actionables.list", "actionables.get", "actionables.move", "actionables.request",
+            "actionables.handoff":
+            switch actionableCall(method, payload) {
+            case .success(let call): return await services.actionables(pluginId: pluginId, trigger: trigger, call)
+            case .failure(let error): return .failure(error)
+            }
         case "notify": return await notify(payload)
         case "run.soon": return await runSoon(payload)
         case "notes.list": return await notesList()
@@ -86,22 +92,20 @@ public final class Bridge: Sendable {
         return .success("null")
     }
 
-    private func boardUpsert(_ payload: Data) async -> Result<String, HostError> {
-        guard case .success(let card) = decode(Card.self, payload) else { return .failure(.failed("invalid card: \(String(decoding: payload, as: UTF8.self).prefix(200))")) }
-        let pluginId = pluginId
-        return await services.board { $0.upsert(card, pluginId: pluginId) }.map { "null" }
-    }
-
-    private func boardRemove(_ payload: Data) async -> Result<String, HostError> {
-        guard case .success(let request) = decode(Identified.self, payload) else { return .failure(.failed("invalid card id")) }
-        let pluginId = pluginId
-        return await services.board { $0.remove(request.id, pluginId: pluginId) }.map { "null" }
-    }
-
-    private func boardList() async -> Result<String, HostError> {
-        let pluginId = pluginId
-        let cards = await services.board { $0.cards(of: pluginId) }
-        return .success(Reply.encode(cards) ?? "[]")
+    private func actionableCall(_ method: String, _ payload: Data) -> Result<ActionableCall, HostError> {
+        switch method {
+        case "board.upsert":
+            guard case .success(let card) = decode(Card.self, payload) else { return .failure(.failed("invalid card: \(String(decoding: payload, as: UTF8.self).prefix(200))")) }
+            return .success(.boardUpsert(card))
+        case "board.remove": return decode(Identified.self, payload).map { .boardRemove($0.id) }
+        case "board.list": return .success(.boardList)
+        case "actionables.list": return decode(ListRequest.self, payload).map { .list(states: $0.states, past: $0.past ?? false) }
+        case "actionables.get": return decode(Identified.self, payload).map { .get($0.id) }
+        case "actionables.move":
+            return decode(MoveRequest.self, payload).flatMap { request in decode(Move.self, payload).map { .move(request.id, transition: request.transition, $0) } }
+        case "actionables.request": return decode(TransitionRequest.self, payload).map { .request($0.id, transition: $0.transition, text: $0.text) }
+        default: return decode(Identified.self, payload).flatMap { request in decode(Handoff.self, payload).map { .handoff(request.id, $0) } }
+        }
     }
 
     private func notify(_ payload: Data) async -> Result<String, HostError> {
@@ -201,6 +205,9 @@ private struct WriteText: Decodable { var path: String; var text: String; var mo
 private struct WriteBase64: Decodable { var path: String; var base64: String }
 private struct LockRequest: Decodable { var name: String; var timeoutMs: Int? }
 private struct Identified: Decodable { var id: String }
+private struct ListRequest: Decodable { var states: [Actionable.State]?; var past: Bool? }
+private struct MoveRequest: Decodable { var id: String; var transition: String }
+private struct TransitionRequest: Decodable { var id: String; var transition: String; var text: String? }
 private struct NotifyRequest: Decodable { var title: String; var body: String; var cardId: String? }
 private struct PluginNote: Encodable { var number: Int; var text: String }
 private struct Since: Decodable { var since: Date }

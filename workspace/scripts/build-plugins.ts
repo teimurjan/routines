@@ -1,8 +1,10 @@
 // Bundles each plugin into dist/plugin.js, the one file that the Swift host loads in JavaScriptCore.
 // A plugin with ui/main.tsx also gets dist/ui, the page that the host shows in a web view.
+// A plugin with src/kinds.ts also gets dist/kinds.json, the shapes of its kinds that the host checks.
 // Plugin ids as arguments build only those plugins. The workspace of the threads runs this script too.
-import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { kindSchemas, missingKinds } from "./kinds.ts";
 
 const PLUGINS_DIR = join(import.meta.dir, "../plugins");
 
@@ -70,9 +72,27 @@ const buildUI = async (dir: string) => {
   return true;
 };
 
+const declaredKinds = (dir: string): string[] => (JSON.parse(readFileSync(join(dir, "plugin.json"), "utf8")) as { kinds?: string[] }).kinds ?? [];
+
+const buildKinds = async (dir: string) => {
+  const source = join(dir, "src/kinds.ts");
+  const declared = declaredKinds(dir);
+  if (!existsSync(source) && declared.length === 0) return true;
+  const schemas = existsSync(source) ? kindSchemas(await import(source)) : {};
+  const missing = missingKinds(declared, schemas);
+  if (missing.length > 0) {
+    console.error(`${dir}: src/kinds.ts exports no schema for ${missing.join(", ")}`);
+    return false;
+  }
+  writeFileSync(join(dir, "dist/kinds.json"), `${JSON.stringify(schemas, null, 2)}\n`);
+  console.log(`built ${join(dir, "dist/kinds.json")}`);
+  return true;
+};
+
 let failed = false;
 for (const dir of pluginDirs) {
   if (!(await buildPlugin(dir))) failed = true;
+  else if (!(await buildKinds(dir))) failed = true;
   if (existsSync(join(dir, "ui/main.tsx")) && !(await buildUI(dir))) failed = true;
 }
 if (failed) process.exit(1);

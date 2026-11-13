@@ -15,7 +15,10 @@ public final class ThreadStore {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
         for name in names where name.hasSuffix(".json") {
             switch JSONFile<AgentThread>(url: dir.appendingPathComponent(name)).load(default: AgentThread(provider: .claude)) {
-            case .success(let thread): threads.append(thread)
+            case .success(var thread):
+                // No turn runs at launch, so a running step is left from a turn that the app did not see end.
+                thread.settleRunningSteps()
+                threads.append(thread)
             case .failure(let error): errors.append(error.description)
             }
         }

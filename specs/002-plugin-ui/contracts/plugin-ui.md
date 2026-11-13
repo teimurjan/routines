@@ -91,7 +91,7 @@ The host sends a `routines` event on `window`. `event.detail` holds `{ type, val
 | `type` | `value` | When |
 | --- | --- | --- |
 | `snapshot` | The snapshot. | After `ready`, at each change of the items, the page, the pending actions, the status or the appearance. |
-| `focus` | `{ cardId }` | After `ready`, for each item that you open from the Inbox or from a notification. |
+| `focus` | `{ cardId }` | After `ready`, for each item that you open from a notification or from the Memory view. |
 
 ## Snapshot
 

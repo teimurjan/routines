@@ -16,7 +16,7 @@ struct PluginBundleTests {
         for entry in entries where entry.problem == nil {
             let log = RunLog(path: paths.dataDir + "/\(entry.id).log", pluginId: entry.id)
             let services = HostServices(
-                locks: LockService(), browser: BrowserService(), board: BoardStore(dir: URL(fileURLWithPath: paths.dataDir + "/board")),
+                locks: LockService(), browser: BrowserService(),
                 notes: NotesStore(url: URL(fileURLWithPath: paths.dataDir + "/notes.json")),
                 notifications: NotificationStore(url: URL(fileURLWithPath: paths.dataDir + "/n.json")),
                 pages: PageStore(dir: URL(fileURLWithPath: paths.dataDir + "/pages")),

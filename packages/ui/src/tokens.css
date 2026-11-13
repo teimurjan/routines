@@ -15,6 +15,7 @@
   --success: #1F9D55;
   --warning: #F59E0B;
   --on-accent: #FFFFFF;
+  --glass-dim: #0000001A;
   --opacity-tint: 0.1;
   --opacity-pressed: 0.75;
   --font-display-size: 26px;
@@ -70,10 +71,17 @@
   --size-page-gutter: 28px;
   --size-page-top: 18px;
   --size-tab-min-width: 76px;
+  --size-float-inset: 20px;
+  --size-float-button: 48px;
+  --size-thread-panel-width: 440px;
+  --size-thread-list-width: 230px;
+  --size-thread-panel-height: 660px;
   --padding-pill: 3.5px 7px;
   --padding-button: 4.5px 9px;
   --padding-field: 7px 10px;
   --padding-tab: 6px 0px;
+  --radius-popover: 24px;
+  --radius-bubble: 16px;
   --radius-card: 14px;
   --radius-sheet: 18px;
   --radius-panel: 12px;
@@ -82,6 +90,7 @@
   --radius-control: 7px;
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04);
   --shadow-segment: 0 1px 1.5px rgb(0 0 0 / 0.08);
+  --shadow-float: 0 10px 24px rgb(0 0 0 / 0.18);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -100,5 +109,6 @@
     --success: #3DD68C;
     --warning: #FBBF24;
     --on-accent: #FFFFFF;
+    --glass-dim: #00000040;
   }
 }

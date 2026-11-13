@@ -103,19 +103,6 @@ public struct Card: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-/// A card with the plugin that owns it, for views that mix plugins.
-public struct BoardItem: Identifiable, Equatable, Sendable {
-    public var pluginId: String
-    public var card: Card
-
-    public var id: String { "\(pluginId)/\(card.id)" }
-
-    public init(pluginId: String, card: Card) {
-        self.pluginId = pluginId
-        self.card = card
-    }
-}
-
 public enum ISO8601 {
     private nonisolated(unsafe) static let withFraction: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()

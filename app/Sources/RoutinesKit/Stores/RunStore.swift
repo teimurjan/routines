@@ -86,7 +86,8 @@ public final class RunLog: @unchecked Sendable {
     public init(path: String, pluginId: String) {
         let url = URL(fileURLWithPath: path)
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: path, contents: nil)
+        // A daily log, such as the log of the polls, gets one more call.
+        if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
         handle = try? FileHandle(forWritingTo: url)
         prefix = pluginId
     }

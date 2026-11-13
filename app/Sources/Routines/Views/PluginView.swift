@@ -15,7 +15,10 @@ struct PluginView: View {
                 Banner(text: blocker).padding(.horizontal, Tokens.Size.pageGutter).padding(.top, Tokens.Space.s12)
             }
             if plugin.manifest.ui == nil {
-                Banner(text: "This plugin has no UI. The Inbox lists its items that need you.").padding(.horizontal, Tokens.Size.pageGutter).padding(.top, Tokens.Space.s12)
+                Banner(text: "This plugin has no UI. Its thread in the thread panel lists its questions to you.").padding(.horizontal, Tokens.Size.pageGutter).padding(.top, Tokens.Space.s12)
+            }
+            if plugin.manifest.role == .source {
+                SourceStatus(cursor: model.host.cursors.cursor(of: plugin.id)).padding(.horizontal, Tokens.Size.pageGutter).padding(.top, Tokens.Space.s12)
             }
             let tab = model.tab(of: plugin)
             TabStrip(tabs: PluginTab.tabs(of: plugin.manifest), label: { $0.label(in: plugin.manifest) }, selection: Binding(get: { tab }, set: { model.tab = $0 }))
@@ -42,5 +45,19 @@ struct Banner: View {
         }
         .padding(10)
         .background(Theme.warning.opacity(Tokens.Opacity.tint), in: RoundedRectangle(cornerRadius: Tokens.Radius.track))
+    }
+}
+
+/// The last poll, the cursor time and the last error of a source. A good poll clears the error.
+private struct SourceStatus: View {
+    var cursor: CursorStore.Cursor
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.s6) {
+            if let error = cursor.error { Banner(text: "The last poll failed: \(error)") }
+            Text(cursor.polledAt.map { "Last good poll \($0.formatted(.relative(presentation: .named))). The cursor moved then." } ?? "No good poll yet.")
+                .font(Tokens.Font.small)
+                .foregroundStyle(Theme.muted)
+        }
     }
 }

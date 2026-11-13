@@ -1,6 +1,6 @@
 # Architecture
 
-Routines is a macOS app that runs scheduled jobs with AI agents on one Mac. A Swift host runs each job as a JavaScript plugin. A plugin shows its work in a UI of its own, and the Inbox lists the items of all plugins that need you. For setup and daily use, see [README.md](README.md). The rules are in `.specify/memory/constitution.md`. The specs are in `specs/`, and the design guide is [DESIGN.md](DESIGN.md).
+Routines is a macOS app that runs scheduled jobs with AI agents on one Mac. A Swift host runs each job as a JavaScript plugin. The host stores the work of all plugins as actionables. A plugin shows its work in a UI of its own, and each routine asks you in its own thread. For setup and daily use, see [README.md](README.md). The rules are in `.specify/memory/constitution.md`. The specs are in `specs/`, and the design guide is [DESIGN.md](DESIGN.md).
 
 ## Terms
 
@@ -8,11 +8,19 @@ Routines is a macOS app that runs scheduled jobs with AI agents on one Mac. A Sw
 | --- | --- |
 | Host | The Swift code in `app/Sources/RoutinesKit`. It knows no routine. |
 | Plugin | A folder with `plugin.json` and one JavaScript bundle, in one of the plugin folders of the app. Each routine is a plugin. |
-| Run | One call of the `run` function of a plugin. A clock slot starts it, or the plugin asks for it with `runSoon`. The app has no "Run now" button, so a plugin that needs a manual run adds an action for it. |
-| Action | One call of `onAction` or `onPluginAction` of a plugin. The manifest lists each action, and a button in the plugin UI starts it. |
-| Card | One item of work of a plugin. Its column is its state. |
+| Routine plugin | A plugin that declares the kinds and states that it handles and the transitions that it makes. It moves only the actionables that it owns. |
+| Source plugin | A plugin that only creates and updates actionables from an outside system, through the shared poll. |
+| Actionable | One item of work that the host stores, with a kind, one owner, a state of the shared lifecycle, typed data and its steps. |
+| Step | One change of an actionable, with its trigger, its actor and its outcome. The host only appends steps. |
+| Transition | A named state change that a routine declares, with the states that it starts from and its risk: `read`, `reversible`, `outward` or `destructive`. |
+| Trigger | One request to start a run, a transition or a plugin action, from any caller. |
+| Run | One call of the `run` function of a plugin. A clock slot, a hand-off, a new actionable of a source or `runSoon` starts it. |
+| Action | One call of `onPluginAction`, or of `onAction` for a plugin of today. The manifest lists each action, and a button in the plugin UI starts it. |
+| Card | The shape of an actionable for the board calls of the plugins of today. Its column maps to a state. |
 | Plugin UI | A page that a plugin ships in `dist/ui`. The host shows it in a web view tab. |
-| Inbox | The list of the items of all plugins that need you. |
+| Routine thread | The thread of one routine in the thread panel, where it asks you its questions. The host derives it from the steps. |
+| Allow list | The `outward` and `destructive` transitions that you allow a routine to make without a question. It is a Keychain item. |
+| Memory | The entries that the memory node writes after each call: your answers, outcomes, facts and preferences. |
 | Page | The blocks that a plugin publishes for its UI, for example Markdown text or a status. |
 | Node | One agent run with a typed input and a typed output. |
 | Cursor | A file that records how far a routine read. |
@@ -30,11 +38,20 @@ Claude connectors, for example Slack and Gmail, are narrow exceptions, because a
 
 ```text
 plugin.json + dist/plugin.js
-   -> PluginCatalog          finds plugins in Application Support and in ROUTINES_PLUGINS_DIR
-   -> PluginHost             schedules runs, queues actions, applies timeouts
+   -> PluginCatalog          finds plugins in Application Support and in ROUTINES_PLUGINS_DIR, reads dist/kinds.json
+   -> Handles                one routine per kind and state, and the load conflicts
+   -> PluginHost.submit      the one entrance: each caller builds a Trigger
+        -> Policy            the pure decision, with no memory in its world
+        -> RunLifecycle      idle, running, queued
+        -> DecisionLog       one line per decision in decisions/<day>.jsonl
    -> PluginRuntime          a new JavaScriptCore context per call, with the prelude
    -> Bridge                 checks each host call against the manifest
-   -> Exec, File, HTTP, Lock and Browser services, and the stores
+   -> ActionableStore        one file per actionable, the steps, the owner and transition checks
+   -> Exec, File, HTTP, Lock and Browser services, and the other stores
+
+Poller                       one poll a minute for all sources, with one agent call on a small model
+MemoryNode                   after each call, one batch call with no tools writes memory entries
+Routines --memory-mcp        the read-only search tool of memory, for nodes
 
 dist/ui (index.html, ui.js, ui.css)
    -> PluginUIScheme         serves routines-ui://<id>/ by the rules of PluginUIResources
@@ -46,13 +63,23 @@ dist/ui (index.html, ui.js, ui.css)
 
 Each call of a plugin gets a new context on its own queue. The prelude in `packages/prelude` builds the `routines` global and the web APIs on one native function. That function returns a promise, and the bridge resolves it with the JSON of a `Result`.
 
-One run of a plugin runs at a time. The actions of a plugin run one after another. They do not wait for a run, so a long run does not delay an approval. State that a run and an action both change goes through `updateStateFile` or `withLock`. The host lock is in memory, because all plugins run in one process.
+One run of a plugin runs at a time. A run trigger during a run queues one more run, and more triggers merge into it. The transition handlers and the actions of a plugin run one after another. They do not wait for a run, so a long run does not delay an approval. State that a run and an action both change goes through `updateStateFile` or `withLock`. The host lock is in memory, because all plugins run in one process.
 
-The scheduler checks the clock slots of each manifest every 20 seconds and after each wake. One or more slots in the time since the last check start one run, so a Mac that slept runs each plugin once.
+The scheduler checks the clock slots of each manifest every 20 seconds and after each wake. One or more slots in the time since the last check submit one clock trigger, so a Mac that slept runs each plugin once.
 
-The stores are JSON files in `~/Library/Application Support/Routines`: the cards and the page per plugin, the notes, the settings, the notifications and the run index. Each run and each action writes a log file in `runs/<plugin>/`. The plugin state is in `~/.local/state/routines`.
+The stores are JSON files in `~/Library/Application Support/Routines`: one file per actionable in `actionables/`, the page per plugin, the notes, the settings, the notifications, the run index, the source cursors in `sources/`, the decisions and memory. Each run and each action writes a log file in `runs/<plugin>/`, and the polls write `runs/polls/<day>.log`. A plugin can read these files, but `PermissionCheck` refuses each write of a plugin to the files of the host. The plugin state is in `~/.local/state/routines`.
 
-Another program can start only the menu actions in `permissions.external` of the manifest. It runs `Routines --perform <plugin> <action> [text]`, which opens a `routines://` URL and prints the answer of the app.
+Another program can start only the plugin actions and the transitions in `permissions.external` of the manifest. It runs `Routines --perform <routine> <transition-or-action> [--item <id>] [text]`, which opens a `routines://` URL and prints the answer of the app. The request goes through the same entrance and policy as a press.
+
+### Actionables and the entrance
+
+The host owns each item of work. A routine plugin declares `handles`, `kinds` and `transitions` in its manifest, and a source plugin declares `source`. A plugin with none of them is a plugin of today: its `board.*` calls and its item actions keep working through `BoardAdapter`, and its old cards moved into actionables once at the first launch.
+
+A routine moves only the actionables that it owns. In a run, `actionables.move` makes a `read` or `reversible` transition. For an `outward` or `destructive` one, the routine calls `actionables.request`, and the policy decides. A hand-off names a kind and a state, not a routine. The host finds the one routine that handles them, checks the data against the schema of the kind, changes the owner in one step and starts that routine at once.
+
+Each caller builds one `Trigger`: the clock, a press, `runSoon`, a hand-off, your answer, a script and a source. `Policy.decide` checks it in a fixed order, and each refusal has one text for each caller (`specs/004-actionables/contracts/entrance.md`). An `outward` or `destructive` transition goes on only after a press, your answer or an entry in the allow list. Otherwise the host asks you in the routine thread. A transition with `confirm: true` starts only from a press. The world of the policy holds no memory, so no memory entry can grant a permission.
+
+The poller polls all sources once a minute with one `claude -p` call on `haiku`. It gets only the read tools that the sources list. Each source maps its part of the output to items in `onPoll`, and the host stores them before it moves the cursor. After each run and transition call, the memory node reads the new steps and writes entries with no tool at all. Nodes search memory through `Routines --memory-mcp`, which only reads.
 
 The manifest lists each action of a plugin, with its target: one item or the plugin. A card carries no actions, and the app draws no action button and no menu. The host finds each action by its id in the manifest. It refuses an unknown id, a wrong target, an item that the plugin does not have and a text action without text. The handler of the plugin then checks that the action fits the state of the item. Each press comes from a plugin UI and goes through `ActionGate`. For an action with `confirm: true`, the gate shows a native dialog, and Cancel calls no handler. External actions skip the gate, because nobody is at the Mac to answer a dialog. `NativeActionsGoneTests` makes sure that no other app code calls an action.
 
@@ -67,17 +94,17 @@ The page reaches nothing but its own plugin. Four layers hold it:
 3. The navigation guard allows only the first load of the index. A link opens in the browser only through `openLink`.
 4. Each web view has its own data store in memory, which goes away with the web view.
 
-The page gets a snapshot with the items, the page blocks, the actions, the pending actions and the appearance of its plugin. The host sends a new snapshot after each change. The web view stays hidden until the page sends `ready`, or for 1 second, so no white frame shows.
+The page gets a snapshot with the actionables that its routine owns and owned, the transitions, the items in the card shape, the page blocks, the actions, the pending actions and the appearance of its plugin. The host sends a new snapshot after each change. The web view stays hidden until the page sends `ready`, or for 1 second, so no white frame shows.
 
 `design/tokens.json` holds the colors, type sizes, spacing, radii and shadows. `bun run tokens` writes the Swift `Tokens` and the CSS of `packages/ui` from it, so the app and the plugin UIs share one style. `TokenUseTests` stops a style literal in the Swift views.
 
-### Inbox
+### Routine threads
 
-The Inbox lists the items of all plugins that need you, newest first. A row and a notification open the plugin, and its UI shows the item after the page is ready. A plugin of your own without a UI shows Runs and Settings under a banner.
+The thread panel has a Routines group above the threads of the agent, with one row per routine and its count of open questions. An actionable with no loaded routine shows in a No owner row. A routine thread lists the open questions first, each with a reply field, or with Allow once, Always allow and Deny for a permission question. Then it lists the answered questions. Your answer is a trigger with the source `answer`, and the handler gets the agent session of the question, so the node continues where it stopped. A notification of a question opens it in its routine thread. The Inbox is gone.
 
 ### Threads
 
-A thread is a conversation with your coding agent, Claude Code or Codex. You choose the agent, the model and the effort with the agent button on the Threads page. A thread keeps the agent that it started with, because a session of one CLI does not resume in the other. The host is the only code that runs the thread CLIs. A plugin cannot start a thread.
+A thread is a conversation with your coding agent, Claude Code or Codex. The threads are in a glass panel that opens from a floating button at the bottom right of the window. You choose the agent, the model and the effort with the agent button under the message field. A thread keeps the agent that it started with, because a session of one CLI does not resume in the other. The host is the only code that runs the thread CLIs. A plugin cannot start a thread.
 
 ```text
 ThreadService            one turn per thread, threads run side by side
@@ -88,7 +115,7 @@ ThreadService            one turn per thread, threads run side by side
    -> ThreadStore        threads/<id>.json in the data folder
 ```
 
-Each turn starts with a `<routines-app>` block before your message. It lists the loaded routines, where each one comes from, and its problem or its last failed run. The agent thus sees a broken build on the next turn. Claude Code runs in auto mode, and Codex runs in its workspace-write sandbox. Neither one asks you in the app. The Claude session loads the settings of the workspace, so `.claude/settings.local.json` there can turn off a Claude plugin for the threads.
+Each turn starts with a `<routines-app>` block before your message. It lists the loaded routines, where each one comes from, and its problem or its last failed run. The agent thus sees a broken build on the next turn. Claude Code runs in auto mode, and Codex runs in its workspace-write sandbox. Neither one asks you in the app. A Command-click or Control-click on an item in a plugin UI adds it to your message. The turn then has a `<routine-items>` block with the fields of each item, its kind, its state and the transitions that a script can perform on it now. The text of an item cannot close the block. In a plugin UI, a host script in its own content world of the web view catches the click. The page cannot reach that script, and the script acts only on trusted clicks, so a plugin still cannot start a thread. The Claude session loads the settings of the workspace, so `.claude/settings.local.json` there can turn off a Claude plugin for the threads.
 
 The agent works in `~/Library/Application Support/Routines/workspace`. `bun run build:workspace` writes its source to `build/workspace`, and the app bundle carries it. At launch, the host copies the source into the workspace when `version.txt` changed. The app owns each entry of the source: `AGENTS.md` with the rules for the agent, the SDK packages, the docs, the build script and `node_modules` with `zod`, `preact` and links to the packages. The agent owns `plugins/`, and an update never touches it. The build works offline, so Codex can build in its sandbox.
 
@@ -100,7 +127,7 @@ The agent works in `~/Library/Application Support/Routines/workspace`. `bun run 
 DESIGN.md               The design guide: the tokens, the controls and the rules for plugin UIs.
 design/tokens.json      The one source of the style. bun run tokens writes the Swift and CSS outputs.
 app/                    The Swift package: RoutinesKit (the host), Routines (the app) and the tests.
-packages/sdk/           The host API types, runAgent, state files, queues, card helpers and the test host.
+packages/sdk/           The host API types, runAgent and runNode, the actionable and poll helpers, state files, queues and the test host.
 packages/ui/            The Preact controls, the tokens CSS and the bridge client of plugin UIs.
 packages/prelude/       The web APIs for JavaScriptCore.
 workspace/              The AGENTS.md, CLAUDE.md, package.json and plugin build script of the workspace of the threads.
@@ -110,7 +137,7 @@ specs/                  Spec Kit features.
 
 ## Agent runner
 
-Each node calls `runAgent` from `packages/sdk/src/agent.ts`. It runs `claude -p` through the host with the prompt on stdin and the Zod output schema as JSON Schema. The host kills the CLI after 2 hours. Then the SDK parses the output with the same schema and returns a `Result`.
+Each node calls `runAgent` or `runNode` from `packages/sdk/src/agent.ts`. It runs `claude -p` through the host with the prompt on stdin and the Zod output schema as JSON Schema. The host kills the CLI after 2 hours. Then the SDK parses the output with the same schema and returns a `Result`. `runNode` also returns the agent session, so a question can store it and your answer can resume it. With `memory: true`, it adds the read-only memory search tool.
 
 ## Untrusted text
 

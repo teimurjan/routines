@@ -14,7 +14,7 @@ struct PluginSettingsView: View {
                     get: { model.host.settings.isEnabled(plugin.id) },
                     set: { model.host.settings.setEnabled($0, pluginId: plugin.id) }))
                 LabeledContent("Schedule", value: ScheduleText.describe(plugin.manifest.schedule, atLaunch: plugin.manifest.runAtLaunch))
-                Picker("Delete done and failed cards", selection: Binding(
+                Picker("Delete closed items", selection: Binding(
                     get: { model.host.retentionDays(plugin.id) },
                     set: { model.host.setRetentionDays($0, pluginId: plugin.id) })
                 ) {
@@ -61,6 +61,26 @@ struct PluginSettingsView: View {
                 Text("Notes")
             } footer: {
                 Text("The agents of this routine read your notes. Only you can add one.").foregroundStyle(Theme.faint)
+            }
+            let risky = plugin.manifest.transitions.filter(\.risk.needsConsent)
+            if !risky.isEmpty {
+                Section {
+                    ForEach(risky) { transition in
+                        Toggle(isOn: Binding(
+                            get: { model.host.allowList.contains(transition.id, routine: plugin.id) },
+                            set: { model.host.allowList.set($0, transition: transition.id, routine: plugin.id) })
+                        ) {
+                            HStack(spacing: 4) {
+                                Text(transition.label)
+                                Text(transition.risk.rawValue).font(.caption).foregroundStyle(Theme.faint)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Allowed without a question")
+                } footer: {
+                    Text("Without a switch, the routine asks you in its thread first. Only you change these, here.").foregroundStyle(Theme.faint)
+                }
             }
             Section("Permissions") {
                 LabeledContent("Commands", value: list(plugin.manifest.permissions.exec))

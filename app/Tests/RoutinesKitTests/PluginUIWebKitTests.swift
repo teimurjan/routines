@@ -22,7 +22,7 @@ struct PluginUIWebKitTests {
         let host = PluginHost(paths: Fixture.uiPaths())
         host.reload()
         let plugin = try #require(host.plugin("hostile-ui"))
-        _ = host.board.upsert(Card(id: "h1", title: "Hostile", column: .needsYou), pluginId: plugin.id)
+        host.boardAdapter.upsert(Card(id: "h1", title: "Hostile", column: .needsYou), pluginId: plugin.id, trigger: "test")
         let reports = Reports()
         let bridge = PluginUIBridge(pluginId: plugin.id)
         let web = PluginWebView(plugin: plugin, background: .windowBackgroundColor, listedImages: { [] }) { body in
@@ -30,7 +30,7 @@ struct PluginUIWebKitTests {
                 reports.blocked[report.name] = report.blocked
                 return .success("null")
             }
-            switch bridge.decide(body, manifest: plugin.manifest, card: { host.board.card(plugin.id, $0) }, snapshot: { "null" }) {
+            switch bridge.decide(body, manifest: plugin.manifest, card: { host.boardAdapter.card(plugin.id, $0) }, snapshot: { "null" }) {
             case .refuse(let reason): return .failure(.failed(reason))
             default: return .success("null")
             }

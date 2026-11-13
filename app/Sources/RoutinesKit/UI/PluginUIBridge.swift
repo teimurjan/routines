@@ -6,11 +6,14 @@ public struct PluginUIAction: Equatable, Sendable {
     /// Nil for a menu action.
     public var cardId: String?
     public var text: String?
+    /// Set for a transition of an actionable. `action` then holds its label and style for the dialog.
+    public var actionableId: String?
 
-    public init(action: CardAction, cardId: String?, text: String?) {
+    public init(action: CardAction, cardId: String?, text: String?, actionableId: String? = nil) {
         self.action = action
         self.cardId = cardId
         self.text = text
+        self.actionableId = actionableId
     }
 }
 
@@ -42,10 +45,14 @@ public struct PluginUIBridge: Sendable {
         var actionId: String?
         var text: String?
         var url: String?
+        var actionable: String?
+        var transition: String?
     }
 
-    /// `card` finds a stored card of this plugin. `snapshot` is the JSON of the current snapshot.
-    public func decide(_ body: Data, manifest: Manifest, card: (String) -> Card?, snapshot: () -> String) -> PluginUIDecision {
+    /// `card` finds a stored card of this plugin, and `actionable` an actionable that it owns. `snapshot` is the JSON of the current snapshot.
+    public func decide(
+        _ body: Data, manifest: Manifest, card: (String) -> Card?, actionable: (String) -> Actionable? = { _ in nil }, snapshot: () -> String
+    ) -> PluginUIDecision {
         guard let message = try? Reply.decoder.decode(Message.self, from: body) else { return .refuse("the message must be an object with a type") }
         switch message.type {
         case "ready": return .ready
@@ -55,6 +62,7 @@ public struct PluginUIBridge: Sendable {
             guard let cardId = message.cardId else { return .refuse("perform needs a cardId") }
             return action(message, cardId: cardId, manifest: manifest, card: card(cardId))
         case "performPluginAction": return action(message, cardId: nil, manifest: manifest, card: nil)
+        case "transition": return transition(message, manifest: manifest, actionable: message.actionable.flatMap(actionable))
         default: return .refuse("unknown message type \(message.type)")
         }
     }
@@ -64,6 +72,17 @@ public struct PluginUIBridge: Sendable {
             return .refuse("only an http or https link opens")
         }
         return .open(url)
+    }
+
+    /// The page names the transition by id. The label, the style and the dialog come from the manifest and the stored title.
+    private func transition(_ message: Message, manifest: Manifest, actionable: Actionable?) -> PluginUIDecision {
+        guard let id = message.transition else { return .refuse("the message needs a transition") }
+        guard let actionable, actionable.owner == pluginId else { return .refuse(Refusal.noActionable(message.actionable ?? "").description) }
+        guard let declaration = manifest.transition(id) else { return .refuse(Refusal.noTransition(routine: pluginId, transition: id).description) }
+        if declaration.input != nil, Policy.isBlank(message.text) { return .refuse(Refusal.needsText(label: declaration.label).description) }
+        let button = CardAction(id: id, label: declaration.label, style: declaration.style, input: declaration.input, confirm: declaration.confirm, target: .item)
+        let request = PluginUIAction(action: button, cardId: nil, text: message.text, actionableId: actionable.id)
+        return declaration.needsConfirmation ? .confirm(request, title: actionable.title) : .perform(request)
     }
 
     private func action(_ message: Message, cardId: String?, manifest: Manifest, card: Card?) -> PluginUIDecision {

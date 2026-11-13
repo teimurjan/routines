@@ -4,14 +4,15 @@ import RoutinesKit
 enum PerformClient {
     static let timeout: TimeInterval = 120
 
+    static let usage = "usage: Routines --perform <routine> <transition-or-action> [--item <id>] [text]\n"
+
     static func run(_ arguments: [String]) -> Int32 {
-        guard arguments.count >= 2 else {
-            FileHandle.standardError.write(Data("usage: Routines --perform <plugin> <action> [text]\n".utf8))
+        guard let parsed = parse(arguments) else {
+            FileHandle.standardError.write(Data(usage.utf8))
             return 64
         }
         let reply = HostPaths.standard().file("replies").appendingPathComponent("\(UUID().uuidString).txt")
-        let text = arguments.count > 2 ? arguments[2...].joined(separator: " ") : nil
-        let request = ExternalAction(pluginId: arguments[0], actionId: arguments[1], text: text, replyFile: reply.path)
+        let request = ExternalAction(pluginId: parsed.routine, actionId: parsed.action, item: parsed.item, text: parsed.text, replyFile: reply.path)
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
         NSWorkspace.shared.open(request.url, configuration: configuration)
@@ -27,5 +28,18 @@ enum PerformClient {
         }
         FileHandle.standardError.write(Data("No answer from the Routines app after \(Int(timeout)) seconds.\n".utf8))
         return 1
+    }
+
+    /// `--item <id>` can stand anywhere after the action. The other words are the text.
+    static func parse(_ arguments: [String]) -> (routine: String, action: String, item: String?, text: String?)? {
+        guard arguments.count >= 2 else { return nil }
+        var rest = Array(arguments.dropFirst(2))
+        var item: String?
+        if let index = rest.firstIndex(of: "--item") {
+            guard index + 1 < rest.count else { return nil }
+            item = rest[index + 1]
+            rest.removeSubrange(index...(index + 1))
+        }
+        return (arguments[0], arguments[1], item, rest.isEmpty ? nil : rest.joined(separator: " "))
     }
 }

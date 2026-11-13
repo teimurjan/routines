@@ -38,10 +38,14 @@ public struct AgentThread: Codable, Equatable, Identifiable, Sendable {
             items[index].text = text
             items[index].state = failed ? .failed : .done
         case .finished(let error):
-            // A tool call without a result did not finish, for example after a stop.
-            for index in items.indices where items[index].state == .running { items[index].state = .failed }
+            settleRunningSteps()
             if let error { items.append(ThreadItem(kind: .error, text: error, state: .failed, date: now)) }
         }
+    }
+
+    /// A step without a result did not finish, for example after a stop or a quit of the app.
+    public mutating func settleRunningSteps() {
+        for index in items.indices where items[index].state == .running { items[index].state = .failed }
     }
 
     /// The routines that a file change of this thread touched, in the order of the first change.
@@ -68,14 +72,65 @@ public struct ThreadItem: Codable, Equatable, Identifiable, Sendable {
     public var text: String
     public var state: State
     public var date: Date
+    /// The routine items that a message of yours asks about.
+    public var references: [ItemReference]?
 
-    public init(id: String = UUID().uuidString, kind: Kind, title: String = "", text: String = "", state: State = .done, date: Date = Date()) {
+    public init(
+        id: String = UUID().uuidString, kind: Kind, title: String = "", text: String = "", state: State = .done, date: Date = Date(),
+        references: [ItemReference]? = nil
+    ) {
         self.id = id
         self.kind = kind
         self.title = title
         self.text = text
         self.state = state
         self.date = date
+        self.references = references
+    }
+
+    /// A step of the agent's work, which the thread folds into a group between messages.
+    public var isStep: Bool {
+        [.command, .fileChange, .tool, .reasoning].contains(kind)
+    }
+}
+
+/// One item of a routine, which you add to a message with a Command-click.
+public struct ItemReference: Codable, Equatable, Hashable, Sendable {
+    public var pluginId: String
+    public var cardId: String
+    public var title: String
+
+    public init(pluginId: String, cardId: String, title: String) {
+        self.pluginId = pluginId
+        self.cardId = cardId
+        self.title = title
+    }
+}
+
+/// A message, an error or a run of steps between them.
+public enum ThreadSegment: Equatable, Identifiable, Sendable {
+    case entry(ThreadItem)
+    case steps([ThreadItem])
+
+    public var id: String {
+        switch self {
+        case .entry(let item): item.id
+        case .steps(let steps): steps.first?.id ?? ""
+        }
+    }
+}
+
+extension AgentThread {
+    /// The items in order, with each run of steps in one segment.
+    public var segments: [ThreadSegment] {
+        items.reduce(into: []) { segments, item in
+            guard item.isStep else { return segments.append(.entry(item)) }
+            if case .steps(let steps) = segments.last {
+                segments[segments.count - 1] = .steps(steps + [item])
+            } else {
+                segments.append(.steps([item]))
+            }
+        }
     }
 }
 
